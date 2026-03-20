@@ -129,8 +129,8 @@ def test_DofLimits(prismatic_bot):
 def test_DofLimits_two_joints(prismatic_bot2):
     target_frequency = 20
     prediction_horizon = 10
-    expected_jerk_limit1 = 1 / (target_frequency * 2)
-    expected_jerk_limit2 = 1 / target_frequency
+    expected_jerk_limit1 = 1 / target_frequency
+    expected_jerk_limit2 = 1 / (target_frequency * 2)
     limits = DofLimits.create(
         prismatic_bot2.active_degrees_of_freedom,
         config=QPControllerConfig(
@@ -138,10 +138,8 @@ def test_DofLimits_two_joints(prismatic_bot2):
         ),
     )
     expected_limits = np.array(
-        [0.5, 1.0] * 8 + [expected_jerk_limit1, expected_jerk_limit2] * 10
+        [1.0, 0.5] * 8 + [expected_jerk_limit1, expected_jerk_limit2] * 10
     )
-    # limits.lower_bounds.evaluate()
-    print(limits.lower_bounds.evaluate())
     assert np.allclose(
         limits.lower_bounds.evaluate(),
         -expected_limits,
@@ -165,7 +163,7 @@ def test_DofLimits_two_joints(prismatic_bot2):
         ]
     )
     velocity_weights = np.array(
-        list(zip(normal_weights / (0.5**2), normal_weights))
+        list(zip(normal_weights, normal_weights / (0.5**2)))
     ).flatten()
     expected_weights = np.concatenate((velocity_weights, [0.0] * 20))
     assert np.allclose(
