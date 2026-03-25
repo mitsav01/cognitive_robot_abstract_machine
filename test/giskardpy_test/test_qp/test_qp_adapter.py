@@ -344,6 +344,6 @@ def test_qp_data_symbolic(prismatic_bot2):
     )
     qp_data_filtered = qp_data.apply_filters()
     solution = QPSolverPIQP().solver_call(qp_data_filtered)
-    debugger = QPDebugger(qp_data_symbolic=qp_data_symbolic, last_solution=solution)
+    debugger = QPDebugger(qp_data_symbolic=qp_data_symbolic, current_solution=solution)
 
     pass
