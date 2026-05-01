@@ -358,17 +358,7 @@ class QPDebugger:
 
     @property
     def free_variable_names(self) -> list[str]:
-        return (
-            self.degree_of_freedom_names
-            + [
-                c.name
-                for c in self.qp_data_symbolic.constraint_collection.equality_constraints
-            ]
-            + [
-                c.name
-                for c in self.qp_data_symbolic.constraint_collection.inequality_constraints
-            ]
-        )
+        return self.qp_data_symbolic.free_variable_names
 
     @property
     def degree_of_freedom_names(self) -> list[str]:

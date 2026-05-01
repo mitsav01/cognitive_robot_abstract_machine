@@ -96,6 +96,7 @@ class DirectLimits:
     upper_bounds: sm.Vector = field(init=False)
     quadratic_weights: sm.Vector = field(init=False)
     linear_weights: sm.Vector = field(init=False)
+    names: list[str] = field(init=False)
 
     @classmethod
     def create(
@@ -137,6 +138,7 @@ class SlackLimits(DirectLimits):
         )
         self.lower_bounds = Vector([-np.inf] * num_of_slack_variables)
         self.upper_bounds = Vector([np.inf] * num_of_slack_variables)
+        self.names = [c.name for c in constraints]
         return self
 
     def normalized_weight(
@@ -159,7 +161,19 @@ class DofLimits(DirectLimits):
         self = cls()
         self.free_variable_bounds(degrees_of_freedom, config)
         self.init_weights(degrees_of_freedom, config)
+        self.make_names(degrees_of_freedom, config)
         return self
+
+    def make_names(
+        self, degrees_of_freedom: List[DegreeOfFreedom], config: QPControllerConfig
+    ):
+        self.names = []
+        for derivative in ["vel", "jerk"]:
+            for k in range(config.prediction_horizon):
+                if derivative == "vel" and k > config.prediction_horizon - 3:
+                    continue
+                for dof in degrees_of_freedom:
+                    self.names.append(f"{dof.name}_{derivative}_k_{k}")
 
     # todo memorize
     def b_profile(
@@ -512,6 +526,9 @@ class EnforcementStrategy(ABC):
     @abstractmethod
     def create_slack_matrix(self, constraints: list[GiskardConstraint]) -> Matrix: ...
 
+    @abstractmethod
+    def create_names(self, constraints: list[GiskardConstraint]) -> list[str]: ...
+
     @property
     def number_of_free_variables(self) -> int:
         return len(self.degrees_of_freedom)
@@ -630,6 +647,9 @@ class IntegralStrategy(EnforcementStrategy):
             ]
         )
 
+    def create_names(self, constraints: list[GiskardConstraint]) -> list[str]:
+        return [c.name for c in constraints]
+
 
 @dataclass
 class VelocityStrategy(EnforcementStrategy):
@@ -715,6 +735,7 @@ class VelocityStrategy(EnforcementStrategy):
         limits.upper_bounds = sm.Vector(upper_slack)
         limits.quadratic_weights = sm.Vector(quadratic_weights)
         limits.linear_weights = sm.Vector(linear_weights)
+        limits.names = names
         return limits
 
     def normalized_weight(
@@ -730,6 +751,13 @@ class VelocityStrategy(EnforcementStrategy):
             for b in bounds:
                 bounds2.append(b * self.config.mpc_dt)
         return Vector(bounds2)
+
+    def create_names(self, constraints: list[GiskardConstraint]) -> list[str]:
+        names = []
+        for t in range(self.config.control_horizon):
+            for c in constraints:
+                names.append(f"t{t:03}/{c.name}")
+        return names
 
 
 @dataclass

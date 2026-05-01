@@ -283,6 +283,8 @@ class QPDataSymbolic:
     box_lower_constraints: Vector = field(init=False)
     box_upper_constraints: Vector = field(init=False)
 
+    free_variable_names: list[str] = field(init=False)
+
     eq_matrix_dofs: Matrix = field(init=False)
     eq_matrix_slack: Matrix = field(init=False)
     eq_bounds: Vector = field(init=False)
@@ -309,6 +311,7 @@ class QPDataSymbolic:
         eq_matrix_slack = [mpc_model.slack_matrix]
         eq_bounds = [mpc_model.bounds]
         self.eq_constraint_names = mpc_model.constraint_names
+        self.free_variable_names = direct_limits.names
 
         for (
             enforcement_strategy,
@@ -331,7 +334,8 @@ class QPDataSymbolic:
             eq_matrix_dofs.append(matrix)
             eq_matrix_slack.append(slack_matrix)
             eq_bounds.append(bounds)
-            self.eq_constraint_names.extend([c.name for c in constraints])
+            self.eq_constraint_names.extend(strategy.create_names(constraints))
+            self.free_variable_names.extend(slack_variables.names)
 
         ineq_matrix_dofs = []
         ineq_matrix_slack = []
@@ -365,7 +369,8 @@ class QPDataSymbolic:
             ineq_matrix_slack.append(slack_matrix)
             lower_bounds.append(lower_bound)
             upper_bounds.append(upper_bound)
-            self.neq_constraint_names.extend([c.name for c in constraints])
+            self.neq_constraint_names.extend(strategy.create_names(constraints))
+            self.free_variable_names.extend(slack_variables.names)
 
         self.quadratic_weights = sm.concatenate(*quadratic_weights)
         self.linear_weights = sm.concatenate(*linear_weights)
