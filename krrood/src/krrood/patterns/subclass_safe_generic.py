@@ -35,9 +35,8 @@ class AbstractSubClassSafeGeneric(ABC):
     type parameters of its generic base to concrete types.
 
     Concrete subclasses must declare the generic parameters via ``Generic[...]`` and inherit from
-    this class. The class declaring ``Generic[...]`` (the direct subclass of
-    :class:`AbstractSubClassSafeGeneric`) is treated as the "generic base" against which type
-    parameters are resolved.
+    this class. Here it is important that in the inheritance order, ``Generic[...]`` is positioned before
+    ``AbstractSubClassSafeGeneric`` similar to how it is done in ``SubClassSafeGeneric``.
     """
 
     def __init_subclass__(cls, **kwargs):
