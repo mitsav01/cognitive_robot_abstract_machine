@@ -90,7 +90,6 @@ class ReachAction(ActionDescription):
         """
         The sequence in which the robot would reach the target pose needs to be achiveable
         """
-        return True
         manipulator = ViewManager.get_end_effector_view(variables["arm"], context.robot)
         test_world = deepcopy(context.world)
         grasp_pose_sequence = kwargs["grasp_description"]._pose_sequence(
@@ -199,7 +198,6 @@ class PickUpAction(ActionDescription):
         """
         The gripper with which to grasp the object needs to be free and the object needs to be reachable
         """
-        return True
         manipulator = ViewManager.get_end_effector_view(variables["arm"], context.robot)
         test_world = deepcopy(context.world)
         grasp_pose_sequence = kwargs["grasp_description"].grasp_pose_sequence(

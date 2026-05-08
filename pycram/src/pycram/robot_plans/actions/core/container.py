@@ -78,8 +78,6 @@ class OpenAction(ActionDescription):
         """
         The gripper with which to open the container has to be free and the handle has to be reachable.
         """
-        return True
-
         manipulator = ViewManager.get_end_effector_view(variables["arm"], context.robot)
         test_world = deepcopy(context.world)
 
