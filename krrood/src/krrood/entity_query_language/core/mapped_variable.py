@@ -320,6 +320,8 @@ class Call(MappedVariable):
         return f"{self._child_._var_._name_}()"
 
     def _update_type_(self) -> None:
+        if self._child_._type_ is None:
+            return
         self._type_ = get_type_hints_of_object(self._child_._type_)["return"]
 
 

@@ -39,6 +39,7 @@ def test_features_extraction():
     np.random.seed(69)
     backend = ProbabilisticBackend(probabilistic_registry, number_of_samples=50)
     samples = list(backend.evaluate(action))
+
     assert all(
         [sample.pose.position.x == samples[0].pose.position.x for sample in samples]
     )
