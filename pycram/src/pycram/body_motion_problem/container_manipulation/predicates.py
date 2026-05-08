@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any
 
 from giskardpy.motion_statechart.motion_statechart import MotionStatechart
 from giskardpy.motion_statechart.tasks.cartesian_tasks import CartesianPose
@@ -24,6 +23,7 @@ from semantic_digital_twin.collision_checking.collision_rules import (
     AvoidExternalCollisions,
 )
 from pycram.body_motion_problem.predicates import CanPerform
+from semantic_digital_twin.robots.abstract_robot import Manipulator
 from semantic_digital_twin.semantic_annotations.semantic_annotations import Door, Drawer
 from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix, Vector3
 from semantic_digital_twin.world_description.world_entity import (
@@ -48,13 +48,13 @@ class ContainerCanPerform(CanPerform):
     are avoided.
     """
 
-    def _resolve_target_and_trajectory(self) -> tuple[Any, list]:
+    def _resolve_target_and_trajectory(self) -> tuple[Body, list]:
         with self.robot._world.reset_state_context():
             target = self._resolve_target()
             trajectory = self._compute_body_trajectory(target)
         return target, trajectory
 
-    def _resolve_target(self) -> Any:
+    def _resolve_target(self) -> Body:
         """
         Resolve the handle body from the motion model or via EQL query.
         """
@@ -77,16 +77,14 @@ class ContainerCanPerform(CanPerform):
             ).evaluate()
         )[0].handle
 
-    def _compute_body_trajectory(self, target: Any) -> list:
+    def _compute_body_trajectory(self, target: Body) -> list:
         """
         Convert the actuator-space trajectory to a sequence of handle poses in world space.
         """
         handle_trajectory = []
         reasoning_world = deepcopy(target._world)
         reasoning_body = reasoning_world.get_body_by_name(target.name)
-        actuator_dof_id = reasoning_world.get_degree_of_freedom_by_name(
-            self.motion.actuator.name.name
-        ).id
+        actuator_dof_id = self.motion.actuator.active_dofs[0].id
 
         for position in self.motion.trajectory:
             reasoning_world.state[actuator_dof_id].position = position
@@ -94,12 +92,11 @@ class ContainerCanPerform(CanPerform):
             handle_trajectory.append(reasoning_body.global_pose)
         return handle_trajectory
 
-    def _build_collision_rules(self, gripper: Any, target: Any) -> list:
+    def _build_collision_rules(self, gripper: Manipulator, target: Body) -> list:
         handle_bodies = [target] if isinstance(target, Body) else list(target.bodies)
         # Avoiding collision with the gripper and the whole apartment makes execution way faster than with only the handle
         # Future improvement: avoid collision with the gripper apartment parts not related to the gripper.
         return [
-            AvoidExternalCollisions(robot=self.robot),
             AllowCollisionBetweenGroups(
                 body_group_a=[b for b in gripper.bodies if b.has_collision()],
                 body_group_b=[
@@ -111,7 +108,7 @@ class ContainerCanPerform(CanPerform):
         ]
 
     def _build_msc(
-        self, root: Any, gripper: Any, target: Any, trajectory: list
+        self, root: Body, gripper: Manipulator, target: Body, trajectory: list
     ) -> MotionStatechart:
         """
         Build the MotionStatechart for approaching and following the handle trajectory.

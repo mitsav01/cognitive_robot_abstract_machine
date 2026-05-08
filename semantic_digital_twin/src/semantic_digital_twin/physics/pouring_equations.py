@@ -110,10 +110,10 @@ def tilt_expression_from_fk(root_T_cup: HomogeneousTransformationMatrix) -> Scal
     θ = acos(R_zz).
 
     :param root_T_cup: Symbolic FK expression from root to cup frame.
-    :return: Symbolic tilt angle in radians ∈ [-π, π].
+    :return: Symbolic tilt angle in radians.
     """
-    cup_z_in_root = root_T_cup.to_rotation_matrix() @ Vector3(0, 0, 1)
-    return sm.acos(sm.limit(cup_z_in_root.z, -3.14, 3.14))
+    cup_z_in_root = root_T_cup.to_rotation_matrix() @ Vector3.Z()
+    return sm.safe_acos(cup_z_in_root.z)
 
 
 @dataclass

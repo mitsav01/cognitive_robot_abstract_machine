@@ -38,7 +38,7 @@ class PouringTask(Task):
     """Tip of the kinematic chain (the cup body)."""
 
     goal_value: float
-    """Target fill level to achieve."""
+    """Target fill level to achieve in terms of percentage."""
 
     tolerance: float
     """Acceptance band around goal_value."""
