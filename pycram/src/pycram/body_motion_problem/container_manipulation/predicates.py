@@ -29,13 +29,16 @@ from semantic_digital_twin.collision_checking.collision_rules import (
 from pycram.body_motion_problem.predicates import CanPerform
 from semantic_digital_twin.robots.abstract_robot import Manipulator
 from semantic_digital_twin.semantic_annotations.semantic_annotations import Door, Drawer
-from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix, Vector3
+from semantic_digital_twin.spatial_types.spatial_types import (
+    HomogeneousTransformationMatrix,
+    Vector3,
+    Point3,
+    Pose,
+)
 from semantic_digital_twin.world_description.world_entity import (
     Body,
     SemanticAnnotation,
 )
-from spatial_types import Point3
-from spatial_types.spatial_types import Pose
 
 
 @dataclass
