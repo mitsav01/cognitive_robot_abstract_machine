@@ -8,6 +8,7 @@ from functools import cached_property
 from rustworkx import rustworkx
 from typing_extensions import TYPE_CHECKING
 
+from krrood.utils import memoize
 from semantic_digital_twin.collision_checking.collision_manager import (
     CollisionManager,
     CollisionConsumer,
@@ -99,7 +100,6 @@ class CollisionGroupConsumer(CollisionConsumer, ABC):
 
     def on_world_model_update(self, world: World):
         self.update_collision_groups(world)
-        self.get_collision_group.cache_clear()
 
     def update_collision_groups(self, world: World):
         """
@@ -135,7 +135,7 @@ class CollisionGroupConsumer(CollisionConsumer, ABC):
             group for group in self.collision_groups if len(group.bodies) > 0
         ]
 
-    @lru_cache
+    @memoize
     def get_collision_group(self, body: KinematicStructureEntity) -> CollisionGroup:
         """
         Ever body belongs to at most one collision group.

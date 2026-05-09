@@ -1137,7 +1137,7 @@ class HasFillLevel(HasContainerGeometry):
                 world=world,
                 parent=self.root,
                 child=phantom,
-                axis=Vector3(0, 0, 1),
+                axis=Vector3.Z(),
                 dof_limits=DegreeOfFreedomLimits(
                     lower=DerivativeMap(position=0.0, velocity=-1.0),
                     upper=DerivativeMap(position=1.0, velocity=1.0),
