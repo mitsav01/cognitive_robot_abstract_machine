@@ -444,16 +444,23 @@ class EQLTranslator:
         Translate logic for set_of() queries.
 
         Supports two cases:
-        # Case 1: Attribute variables
-        b = variable(type_=Body, domain=[])
-        query = an(set_of(b.size, b.name))
-        # → SELECT size, name FROM BodyDAO
 
-        # Case 2: Entity variables
-        C = variable(Container, domain=world.bodies)
-        H = variable(Handle, domain=world.bodies)
-        query = an(set_of(C, H).where(C == FC.parent))
-        # → SELECT ContainerDAO.*, HandleDAO.* FROM ... JOIN ...
+        Case 1 — Attribute variables:
+
+        .. code-block:: python
+
+            b = variable(type_=Body, domain=[])
+            query = an(set_of(b.size, b.name))
+            # → SELECT size, name FROM BodyDAO
+
+        Case 2 — Entity variables:
+
+        .. code-block:: python
+
+            C = variable(Container, domain=world.bodies)
+            H = variable(Handle, domain=world.bodies)
+            query = an(set_of(C, H).where(C == FC.parent))
+            # → SELECT ContainerDAO.*, HandleDAO.* FROM ... JOIN ...
         """
         selected = self.select_like._selected_variables_
 
