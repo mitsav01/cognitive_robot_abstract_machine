@@ -61,7 +61,7 @@ class PR2(AbstractRobot, SpecifiesLeftRightArm, HasNeck):
 
     def _setup_collision_rules(self):
         """
-        eoads the SRDF file for the PR2 robot, if it exists.
+        Loads the SRDF file for the PR2 robot, if it exists.
         """
         srdf_path = os.path.join(
             Path(files("semantic_digital_twin")).parent.parent,
