@@ -14,8 +14,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
-from ..world_description.world_entity import SemanticAnnotation
-
+from semantic_digital_twin.world_description.world_entity import SemanticAnnotation
 
 class FillState(str, Enum):
     EMPTY = "empty"
@@ -53,12 +52,12 @@ class ObjectState(SemanticAnnotation):
     timestamp: Optional[float] = field(default=None, kw_only=True)
 
     @property
-    def is_fill_known(self) -> bool:
-        return self.fill_state is not None
+    def is_fill(self) -> bool:
+        return self.fill_state == FillState.FULL
 
     @property
-    def is_cut_known(self) -> bool:
-        return self.cut_state is not None
+    def is_cut(self) -> bool:
+        return self.cut_state == CutState.CUT
 
     @property
     def has_state(self) -> bool:

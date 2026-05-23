@@ -11,8 +11,6 @@ import unittest
 from unittest.mock import MagicMock
 
 from semantic_digital_twin.world_description.world_entity import SemanticAnnotation
-
-# Import your newly created module
 from semantic_digital_twin.semantic_annotations.object_state import (
     ObjectState,
     FillState,
