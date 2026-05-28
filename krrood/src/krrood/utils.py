@@ -617,8 +617,8 @@ def run_subprocess_on_file(command: List[str]):
 def get_generic_type_params(
     cls,
     generic_base: Type,
-    from_root_generic_base: bool = True,
-    from_specialized_generic_base: bool = True,
+    include_root_generic_base: bool = True,
+    include_specialized_generic_base: bool = True,
 ) -> List[Type[T]]:
     """
     Given a subclass and its generic base, return the concrete type parameter(s).
@@ -628,19 +628,23 @@ def get_generic_type_params(
 
     :param cls: The subclass to check.
     :param generic_base: The generic base class to check against.
+    :param include_root_generic_base: Whether to include type parameters the class gets from its own typing.Generic directly.
+    :param include_specialized_generic_base: Whether to include type parameters from superclasses that are generic, which are not typing.Generic.
     :return: A list of concrete type parameters
     """
     params = []
     for base in getattr(cls, "__orig_bases__", []):
         base_origin = get_origin(base)
         if not base_origin:
-            if isclass(base) and issubclass(base, generic_base):
-                params.extend(get_generic_type_params(base, generic_base))
             continue
-        if from_root_generic_base and base_origin is Generic:
-            params.extend(list(get_args(base)))
-        elif from_specialized_generic_base and issubclass(base_origin, generic_base):
-            params.extend(list(get_args(base)))
+        if not (include_root_generic_base or base_origin is Generic):
+            continue
+        if not (
+            include_specialized_generic_base or issubclass(base_origin, generic_base)
+        ):
+            continue
+
+        params.extend(list(get_args(base)))
 
     return params
 

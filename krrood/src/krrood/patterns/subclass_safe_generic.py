@@ -5,7 +5,7 @@ from copy import copy
 from dataclasses import dataclass, fields, Field, field
 from functools import lru_cache
 from inspect import isclass
-from typing import Union, Tuple, Hashable
+from typing import Tuple
 
 from typing_extensions import (
     Generic,
@@ -50,8 +50,6 @@ class AbstractSubClassSafeGeneric(ABC):
         Automatically updates the field types that use the generic type parameters with the new
         specified types, before the class is initialized.
         """
-        # if cls.__name__ != "SubClassGenericThatUpdatesGenericTypeToBuiltInType":
-        #     return
 
         substitutions = cls._get_generic_type_substitutions()
         if not substitutions:
@@ -121,11 +119,9 @@ class AbstractSubClassSafeGeneric(ABC):
         :return: The existing field if found, otherwise None.
         """
         for base in cls.__mro__:
-            if (
-                hasattr(base, "__dataclass_fields__")
-                and name in base.__dataclass_fields__
-            ):
-                return base.__dataclass_fields__[name]
+            fields = getattr(base, "__dataclass_fields__", None)
+            if fields and name in fields:
+                return fields[name]
         return None
 
     @classmethod
@@ -146,7 +142,9 @@ class AbstractSubClassSafeGeneric(ABC):
         substitutions = {}
         for base in getattr(cls, "__orig_bases__", []):
             base_origin, resolved_types = cls._resolve_base_origin_and_arguments(base)
-            if base_origin is None:
+            if base_origin is None or not issubclass(
+                base_origin, AbstractSubClassSafeGeneric
+            ):
                 continue
 
             # Map the root TypeVars of the base to the concrete arguments provided here
