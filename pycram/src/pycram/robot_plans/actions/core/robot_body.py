@@ -11,7 +11,7 @@ from krrood.entity_query_language.core.variable import Variable
 from pycram.datastructures.dataclasses import Context
 from pycram.robot_plans import MoveManipulatorMotion
 from semantic_digital_twin.reasoning.predicates import allclose
-from semantic_digital_twin.robots.abstract_robot import Manipulator
+from semantic_digital_twin.robots.robot_parts import EndEffector
 from semantic_digital_twin.spatial_types.spatial_types import Pose
 from pycram.datastructures.enums import AxisIdentifier, Arms
 
@@ -249,7 +249,7 @@ class MoveManipulatorAction(ActionDescription):
     The pose where the manipulator should be moved to.
     """
 
-    manipulator: Manipulator
+    manipulator: EndEffector
     """
     The manipulator that should be moved.
     """

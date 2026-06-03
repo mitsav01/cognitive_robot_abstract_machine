@@ -14,6 +14,7 @@ from sortedcontainers import SortedSet
 
 from semantic_digital_twin.semantic_annotations.semantic_annotations import (
     SemanticEnvironmentAnnotation,
+    Agent,
 )
 
 logger = logging.getLogger("semantic_digital_twin")
@@ -36,10 +37,8 @@ from semantic_digital_twin.spatial_types import Point3
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.world_entity import (
     SemanticAnnotation,
-    SemanticEnvironmentAnnotation,
     Body,
     Region,
-    Agent,
 )
 from semantic_digital_twin.world_description.connections import FixedConnection
 from semantic_digital_twin.world_description.geometry import (
