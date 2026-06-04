@@ -4103,7 +4103,10 @@ class GraspDescriptionDAO(
     )
 
     end_effector: Mapped[EndEffectorDAO] = relationship(
-        "EndEffectorDAO", uselist=False, foreign_keys=[end_effector_id], post_update=True
+        "EndEffectorDAO",
+        uselist=False,
+        foreign_keys=[end_effector_id],
+        post_update=True,
     )
 
 
@@ -6791,7 +6794,10 @@ class MoveManipulatorActionDAO(
         "PoseMappingDAO", uselist=False, foreign_keys=[target_pose_id], post_update=True
     )
     end_effector: Mapped[EndEffectorDAO] = relationship(
-        "EndEffectorDAO", uselist=False, foreign_keys=[end_effector_id], post_update=True
+        "EndEffectorDAO",
+        uselist=False,
+        foreign_keys=[end_effector_id],
+        post_update=True,
     )
 
     __mapper_args__ = {
@@ -6832,7 +6838,10 @@ class MoveManipulatorMotionDAO(
         "PoseMappingDAO", uselist=False, foreign_keys=[target_id], post_update=True
     )
     end_effector: Mapped[EndEffectorDAO] = relationship(
-        "EndEffectorDAO", uselist=False, foreign_keys=[end_effector_id], post_update=True
+        "EndEffectorDAO",
+        uselist=False,
+        foreign_keys=[end_effector_id],
+        post_update=True,
     )
 
     __mapper_args__ = {
@@ -8581,7 +8590,10 @@ class EndEffectorDidNotReachTargetDAO(
     )
 
     end_effector: Mapped[EndEffectorDAO] = relationship(
-        "EndEffectorDAO", uselist=False, foreign_keys=[end_effector_id], post_update=True
+        "EndEffectorDAO",
+        uselist=False,
+        foreign_keys=[end_effector_id],
+        post_update=True,
     )
     target: Mapped[PoseMappingDAO] = relationship(
         "PoseMappingDAO", uselist=False, foreign_keys=[target_id], post_update=True
@@ -21054,25 +21066,6 @@ class ProcthorBoxDAO(
 
     __mapper_args__ = {
         "polymorphic_identity": "ProcthorBoxDAO",
-        "inherit_condition": database_id == HasRootBodyDAO.database_id,
-    }
-
-
-class RobotPartMixinDAO(
-    HasRootBodyDAO,
-    DataAccessObject[semantic_digital_twin.robots.robot_part_mixins.RobotPartMixin],
-):
-
-    __tablename__ = "RobotPartMixinDAO"
-
-    database_id: Mapped[builtins.int] = mapped_column(
-        ForeignKey(HasRootBodyDAO.database_id),
-        primary_key=True,
-        use_existing_column=True,
-    )
-
-    __mapper_args__ = {
-        "polymorphic_identity": "RobotPartMixinDAO",
         "inherit_condition": database_id == HasRootBodyDAO.database_id,
     }
 

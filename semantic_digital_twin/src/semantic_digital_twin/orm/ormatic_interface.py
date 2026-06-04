@@ -12157,25 +12157,6 @@ class ProcthorBoxDAO(
     }
 
 
-class RobotPartMixinDAO(
-    HasRootBodyDAO,
-    DataAccessObject[semantic_digital_twin.robots.robot_part_mixins.RobotPartMixin],
-):
-
-    __tablename__ = "RobotPartMixinDAO"
-
-    database_id: Mapped[builtins.int] = mapped_column(
-        ForeignKey(HasRootBodyDAO.database_id),
-        primary_key=True,
-        use_existing_column=True,
-    )
-
-    __mapper_args__ = {
-        "polymorphic_identity": "RobotPartMixinDAO",
-        "inherit_condition": database_id == HasRootBodyDAO.database_id,
-    }
-
-
 class SaltContainerDAO(
     HasRootBodyDAO,
     DataAccessObject[
