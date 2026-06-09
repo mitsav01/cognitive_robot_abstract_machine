@@ -168,7 +168,7 @@ from pycram.locations.factories import accessing_location
 from semantic_digital_twin.semantic_annotations.semantic_annotations import Drawer, Handle
 
 with world.modify_world():
-    world.add_semantic_annotation(
+    world.add_semantic_annotation_recursively(
         drawer := Drawer(
             root=world.get_body_by_name("cabinet10_drawer_middle"),
             handle=Handle(root=world.get_body_by_name("handle_cab10_m")),
