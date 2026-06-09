@@ -95,6 +95,9 @@ class OpenAction(ActionDescription):
                 ],
                 pose=kwargs["object_designator"].global_pose,
                 tip_link=end_effector.tool_frame,
+                grasp_description=GraspDescription(
+                    ApproachDirection.FRONT, VerticalAlignment.NoAlignment, end_effector
+                ),
             ),
         )
 

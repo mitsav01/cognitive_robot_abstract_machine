@@ -119,22 +119,13 @@ class ReachabilityValidator(PoseValidator):
     The grasp description that should be used for validation
     """
 
-    def __post_init__(self):
-        [end_effector] = [
-            ee
-            for ee in self.world.get_semantic_annotations_by_type(EndEffector)
-            if ee.tool_frame == self.tip_link
-        ]
-        self.grasp_description = self.grasp_description or GraspDescription(
-            ApproachDirection.FRONT, VerticalAlignment.NoAlignment, end_effector
-        )
-
     def __call__(self) -> bool:
         return ReachabilitySequenceValidator(
             pose_sequence=[self.pose],
             tip_link=self.tip_link,
             robot=self.robot,
             world=self.world,
+            grasp_description=self.grasp_description,
         ).__call__()
 
 
@@ -160,16 +151,6 @@ class ReachabilitySequenceValidator(PoseValidator):
     The grasp description that should be used for validation
     """
 
-    def __post_init__(self):
-        [end_effector] = [
-            ee
-            for ee in self.world.get_semantic_annotations_by_type(EndEffector)
-            if ee.tool_frame == self.tip_link
-        ]
-        self.grasp_description = self.grasp_description or GraspDescription(
-            ApproachDirection.FRONT, VerticalAlignment.NoAlignment, end_effector
-        )
-
     def create_msc(self):
         alternative_motion = AlternativeMotion.check_for_alternative(
             self.robot, MoveToolCenterPointMotion
@@ -185,11 +166,8 @@ class ReachabilitySequenceValidator(PoseValidator):
             sequence = []
             for pose in self.pose_sequence:
 
-                end_effector_pose_orientation = (
-                    self.grasp_description.grasp_orientation()
-                )
-
-                pose = self.grasp_description._pose_sequence(pose)[1]
+                if self.grasp_description:
+                    pose = self.grasp_description._pose_sequence(pose)[1]
 
                 motion = alternative_motion(
                     pose,
@@ -214,14 +192,18 @@ class ReachabilitySequenceValidator(PoseValidator):
                 else self.world.root
             )
 
-            rotated_sequence = [
-                self.grasp_description._pose_sequence(pose)[1]
-                for pose in self.pose_sequence
-            ]
+            sequence = (
+                [
+                    self.grasp_description._pose_sequence(pose)[1]
+                    for pose in self.pose_sequence
+                ]
+                if self.grasp_description
+                else self.pose_sequence
+            )
 
             sequence = [
                 CartesianPose(root_link=root, tip_link=self.tip_link, goal_pose=pose)
-                for pose in rotated_sequence
+                for pose in sequence
             ]
 
         msc = MotionStatechart()
