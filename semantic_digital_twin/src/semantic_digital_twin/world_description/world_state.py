@@ -386,11 +386,12 @@ class WorldState(MutableMapping[UUID, WorldStateEntryView]):
     def merge_state(self, other: WorldState):
         """
         Merges another WorldState into this one, overwriting values for any DOFs that are present in both states.
-        DOFs that only exist in the other state are skipped.
+        If a DOF only exists in the other state, a DofNotInWorldStateError is raised.
         """
+
         for dof_id in other:
             if dof_id not in self:
-                continue
+                raise DofNotInWorldStateError(dof_id)
             self_state_dof = self[dof_id]
             other_state_dof = other[dof_id]
             self_state_dof.position = other_state_dof.position

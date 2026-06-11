@@ -52,6 +52,8 @@ from semantic_digital_twin.exceptions import (
     AtomicWorldModificationNotAtomic,
     SemanticAnnotationCircularDependencyError,
     WorldValidationError,
+    WorldIsNotATreeError,
+    WorldContainsOrphanedDegreeOfFreedom,
 )
 from semantic_digital_twin.mixin import HasSimulatorProperties
 from semantic_digital_twin.robots.robot_parts import AbstractRobot
@@ -506,15 +508,9 @@ class World(HasSimulatorProperties):
         if self.is_empty():
             return True
         if len(self.kinematic_structure_entities) != (len(self.connections) + 1):
-            raise WorldValidationError(
-                message=f"The world is not a tree: found "
-                f"{len(self.kinematic_structure_entities)} kinematic structure "
-                f"entities but {len(self.connections)} connections."
-            )
+            raise WorldIsNotATreeError(world=self)
         if not rx.is_weakly_connected(self.kinematic_structure):
-            raise WorldValidationError(
-                message="The world is not a tree: the kinematic structure is not connected."
-            )
+            raise WorldIsNotATreeError(world=self)
         self._validate_dofs()
         return True
 
@@ -523,10 +519,7 @@ class World(HasSimulatorProperties):
             dof for connection in self.connections for dof in connection.dofs
         }
         if actual_dofs != set(self.degrees_of_freedom):
-            raise WorldValidationError(
-                message="self.degrees_of_freedom does not match the actual dofs used in "
-                "connections. Did you forget to call self.delete_orphaned_dofs()?"
-            )
+            raise WorldContainsOrphanedDegreeOfFreedom(world=self, actual_dofs=actual_dofs)
 
     # %% Properties
     @property

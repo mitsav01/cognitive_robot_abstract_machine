@@ -1,7 +1,7 @@
 from __future__ import annotations, absolute_import
 
 from dataclasses import dataclass, field
-from typing import Dict
+from typing import Dict, Set
 from uuid import UUID
 
 from typing_extensions import (
@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from semantic_digital_twin.spatial_types import Vector3, Point3
     from semantic_digital_twin.world_description.degree_of_freedom import (
         DegreeOfFreedomLimits,
+        DegreeOfFreedom,
     )
     from semantic_digital_twin.world_description.world_modification import (
         WorldModification,
@@ -204,6 +205,48 @@ class WorldValidationError(LogicalError):
     """
     Raised when the world fails validation, e.g., when the kinematic structure is not a tree.
     """
+
+
+@dataclass
+class WorldIsNotATreeError(WorldValidationError):
+    """
+    Raised when the kinematic structure of the world is not a tree during validation.
+    """
+
+    world: World
+    """
+    The world that failed validation.
+    """
+
+    def __post_init__(self):
+        self.message = (
+            f"The world is not a tree: found {len(self.world.kinematic_structure_entities)} kinematic "
+            f"structure entities but {len(self.world.connections)} connections."
+        )
+
+
+@dataclass
+class WorldContainsOrphanedDegreeOfFreedom(WorldValidationError):
+    """
+    Raised when the kinematic structure of the world contains orphaned degrees of freedom during validation.
+    """
+
+    world: World
+    """
+    The world that failed validation.
+    """
+
+    actual_dofs: Set[DegreeOfFreedom]
+    """
+    The actual degrees of freedom used in connections.
+    """
+
+    def __post_init__(self):
+        self.message = (
+            "self.degrees_of_freedom does not match the actual dofs used in connections. The orphaned degrees of freedom are: "
+            f"{set(self.world.degrees_of_freedom) - self.actual_dofs}"
+            " Did you forget to call self.delete_orphaned_dofs()?"
+        )
 
 
 @dataclass
