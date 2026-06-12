@@ -1,7 +1,7 @@
-![](doc/source/_static/images/cora-plex-dark.png#gh-light-mode-only)
-![](doc/source/_static/images/cora-plex-dark.png#gh-dark-mode-only)
-
-
+<img src="doc/source/_static/images/cora-plex-dark.png"
+     width="50%"
+     alt="CORA Plex Logo">
+     
 ## Cite
 @software{coraplex,
   author  = {Dech, Jonas, Hassouna, Vanessa and Krohm, Luca},
