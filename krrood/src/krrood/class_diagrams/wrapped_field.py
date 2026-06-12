@@ -28,6 +28,28 @@ from krrood.class_diagrams.exceptions import MissingContainedTypeOfContainer
 from krrood.class_diagrams.utils import behaves_like_a_built_in_class, get_type_hints_of_object
 from krrood.utils import module_and_class_name, is_builtin_type
 
+
+def common_base_class(types: List[Type]) -> Optional[Type]:
+    """
+    Return the lowest common ancestor of *types*, or ``None`` if the only
+    common ancestor is :class:`object`.
+
+    Non-class entries (e.g. unresolved forward references) are silently
+    skipped.  If no classes remain after filtering, ``None`` is returned.
+    """
+    classes = [t for t in types if isclass(t)]
+    if not classes:
+        return None
+    if len(classes) == 1:
+        return classes[0]
+    common = set(classes[0].__mro__)
+    for t in classes[1:]:
+        common &= set(t.__mro__)
+    for cls in classes[0].__mro__:
+        if cls in common and cls is not object:
+            return cls
+    return None
+
 if TYPE_CHECKING:
     from krrood.class_diagrams.class_diagram import WrappedClass
     from krrood.ontomatic.property_descriptor.property_descriptor import PropertyDescriptor
@@ -217,8 +239,13 @@ class WrappedField:
     def type_endpoint(self) -> Type:
         if self.is_container or self.is_optional:
             return self.contained_type
-        else:
-            return self.resolved_type
+        resolved = self.resolved_type
+        if get_origin(resolved) is Union:
+            non_none = [a for a in get_args(resolved) if a is not NoneType]
+            lca = common_base_class(non_none)
+            if lca is not None:
+                return lca
+        return resolved
 
     @cached_property
     def is_role_taker(self) -> bool:
