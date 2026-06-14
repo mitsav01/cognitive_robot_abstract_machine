@@ -16,8 +16,10 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship, Mapped, mapped_column, DeclarativeBase
 
 import builtins
+import coraplex.orm.model
 import enum
 import krrood.adapters.json_serializer
+import krrood.entity_query_language.orm.model
 import krrood.ormatic.custom_types
 import krrood.ormatic.data_access_objects.alternative_mappings
 import krrood.ormatic.type_dict
@@ -489,6 +491,23 @@ class ShapeCollectionDAO_shapes_association(Base, AssociationDataAccessObject):
 
     target: Mapped[ShapeDAO] = relationship(
         "ShapeDAO", foreign_keys=[target_shapedao_id]
+    )
+
+
+class SymbolGraphMappingDAO_instances_association(Base, AssociationDataAccessObject):
+    __tablename__ = "_81067648797638488542008423406786912563441407992272678641741406"
+
+    database_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    source_symbolgraphmappingdao_id: Mapped[int] = mapped_column(
+        ForeignKey("SymbolGraphMappingDAO.database_id")
+    )
+    target_wrappedinstancemappingdao_id: Mapped[int] = mapped_column(
+        ForeignKey("WrappedInstanceMappingDAO.database_id")
+    )
+
+    target: Mapped[WrappedInstanceMappingDAO] = relationship(
+        "WrappedInstanceMappingDAO", foreign_keys=[target_wrappedinstancemappingdao_id]
     )
 
 
@@ -1451,10 +1470,10 @@ class WorldModelSnapshotDAO_modifications_association(
 class WorldContainsOrphanedDegreeOfFreedomDAO_actual_dofs_association(
     Base, AssociationDataAccessObject
 ):
-
     __tablename__ = "_27594185991583260744377058616234240952324321228677592080591471"
 
     database_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
     source_worldcontainsorphaneddegreeoffreedomdao_id: Mapped[int] = mapped_column(
         ForeignKey("WorldContainsOrphanedDegreeOfFreedomDAO.database_id")
     )
@@ -4738,6 +4757,27 @@ class PipelineDAO(
     )
 
 
+class PlanMappingDAO(Base, DataAccessObject[coraplex.orm.model.PlanMapping]):
+    __tablename__ = "PlanMappingDAO"
+
+    database_id: Mapped[builtins.int] = mapped_column(
+        Integer, primary_key=True, use_existing_column=True
+    )
+
+    initial_world_id: Mapped[typing.Optional[builtins.int]] = mapped_column(
+        ForeignKey("WorldMappingDAO.database_id", use_alter=True),
+        nullable=True,
+        use_existing_column=True,
+    )
+
+    initial_world: Mapped[WorldMappingDAO] = relationship(
+        "WorldMappingDAO",
+        uselist=False,
+        foreign_keys=[initial_world_id],
+        post_update=True,
+    )
+
+
 class PointOccupiedErrorDAO(
     Base, DataAccessObject[semantic_digital_twin.exceptions.PointOccupiedError]
 ):
@@ -6902,8 +6942,9 @@ class MujocoJointDAO(
         use_existing_column=True,
     )
 
-    stiffness: Mapped[builtins.float] = mapped_column(use_existing_column=True)
-
+    stiffness: Mapped[typing.List[builtins.float]] = mapped_column(
+        JSON, nullable=False, use_existing_column=True
+    )
     actuator_force_range: Mapped[typing.List[builtins.float]] = mapped_column(
         JSON, nullable=False, use_existing_column=True
     )
@@ -6930,17 +6971,18 @@ class MujocoTendonDAO(
         sqlalchemy.sql.sqltypes.Text, use_existing_column=True
     )
     armature: Mapped[builtins.float] = mapped_column(use_existing_column=True)
-    damping: Mapped[builtins.float] = mapped_column(use_existing_column=True)
     frictionloss: Mapped[builtins.float] = mapped_column(use_existing_column=True)
     group: Mapped[builtins.int] = mapped_column(use_existing_column=True)
     margin: Mapped[builtins.float] = mapped_column(use_existing_column=True)
     material: Mapped[builtins.str] = mapped_column(
         sqlalchemy.sql.sqltypes.Text, use_existing_column=True
     )
-    stiffness: Mapped[builtins.float] = mapped_column(use_existing_column=True)
     width: Mapped[builtins.float] = mapped_column(use_existing_column=True)
 
     actuator_force_range: Mapped[typing.List[builtins.float]] = mapped_column(
+        JSON, nullable=False, use_existing_column=True
+    )
+    damping: Mapped[typing.List[builtins.float]] = mapped_column(
         JSON, nullable=False, use_existing_column=True
     )
     range: Mapped[typing.List[builtins.float]] = mapped_column(
@@ -6959,6 +7001,9 @@ class MujocoTendonDAO(
         JSON, nullable=False, use_existing_column=True
     )
     spring_length: Mapped[typing.List[builtins.float]] = mapped_column(
+        JSON, nullable=False, use_existing_column=True
+    )
+    stiffness: Mapped[typing.List[builtins.float]] = mapped_column(
         JSON, nullable=False, use_existing_column=True
     )
 
@@ -7190,6 +7235,29 @@ class PoseMappingDAO(
     __mapper_args__ = {
         "polymorphic_identity": "PoseMappingDAO",
         "inherit_condition": database_id == SpatialTypeDAO.database_id,
+    }
+
+
+class GrasPoseMappingDAO(
+    PoseMappingDAO, DataAccessObject[coraplex.orm.model.GrasPoseMapping]
+):
+    __tablename__ = "GrasPoseMappingDAO"
+
+    database_id: Mapped[builtins.int] = mapped_column(
+        ForeignKey(PoseMappingDAO.database_id),
+        primary_key=True,
+        use_existing_column=True,
+    )
+
+    arm: Mapped[typing.Optional[coraplex.datastructures.enums.Arms]] = mapped_column(
+        krrood.ormatic.custom_types.PolymorphicEnumType,
+        nullable=True,
+        use_existing_column=True,
+    )
+
+    __mapper_args__ = {
+        "polymorphic_identity": "GrasPoseMappingDAO",
+        "inherit_condition": database_id == PoseMappingDAO.database_id,
     }
 
 
@@ -7610,6 +7678,25 @@ class COACDMeshDecomposerDAO(
         "polymorphic_identity": "COACDMeshDecomposerDAO",
         "inherit_condition": database_id == MeshDecomposerDAO.database_id,
     }
+
+
+class SymbolGraphMappingDAO(
+    Base, DataAccessObject[krrood.entity_query_language.orm.model.SymbolGraphMapping]
+):
+    __tablename__ = "SymbolGraphMappingDAO"
+
+    database_id: Mapped[builtins.int] = mapped_column(
+        Integer, primary_key=True, use_existing_column=True
+    )
+
+    instances: Mapped[builtins.list[SymbolGraphMappingDAO_instances_association]] = (
+        relationship(
+            "SymbolGraphMappingDAO_instances_association",
+            collection_class=builtins.list,
+            cascade="all, delete-orphan",
+            foreign_keys="[SymbolGraphMappingDAO_instances_association.source_symbolgraphmappingdao_id]",
+        )
+    )
 
 
 class TFWrapperDAO(
@@ -18447,7 +18534,6 @@ class WorldValidationErrorDAO(
     LogicalErrorDAO,
     DataAccessObject[semantic_digital_twin.exceptions.WorldValidationError],
 ):
-
     __tablename__ = "WorldValidationErrorDAO"
 
     database_id: Mapped[builtins.int] = mapped_column(
@@ -18478,7 +18564,6 @@ class BrokenWorldModificationHistoryErrorDAO(
         semantic_digital_twin.exceptions.BrokenWorldModificationHistoryError
     ],
 ):
-
     __tablename__ = "BrokenWorldModificationHistoryErrorDAO"
 
     database_id: Mapped[builtins.int] = mapped_column(
@@ -18499,7 +18584,6 @@ class WorldContainsOrphanedDegreeOfFreedomDAO(
         semantic_digital_twin.exceptions.WorldContainsOrphanedDegreeOfFreedom
     ],
 ):
-
     __tablename__ = "WorldContainsOrphanedDegreeOfFreedomDAO"
 
     database_id: Mapped[builtins.int] = mapped_column(
@@ -18527,7 +18611,6 @@ class WorldIsNotATreeErrorDAO(
     WorldValidationErrorDAO,
     DataAccessObject[semantic_digital_twin.exceptions.WorldIsNotATreeError],
 ):
-
     __tablename__ = "WorldIsNotATreeErrorDAO"
 
     database_id: Mapped[builtins.int] = mapped_column(
@@ -18540,6 +18623,17 @@ class WorldIsNotATreeErrorDAO(
         "polymorphic_identity": "WorldIsNotATreeErrorDAO",
         "inherit_condition": database_id == WorldValidationErrorDAO.database_id,
     }
+
+
+class WrappedInstanceMappingDAO(
+    Base,
+    DataAccessObject[krrood.entity_query_language.orm.model.WrappedInstanceMapping],
+):
+    __tablename__ = "WrappedInstanceMappingDAO"
+
+    database_id: Mapped[builtins.int] = mapped_column(
+        Integer, primary_key=True, use_existing_column=True
+    )
 
 
 class WrongWorldModelVersionDAO(
