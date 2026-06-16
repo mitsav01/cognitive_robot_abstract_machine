@@ -1471,7 +1471,7 @@ class World(HasSimulatorProperties):
         self,
         branch_root: KinematicStructureEntity,
         new_parent: KinematicStructureEntity,
-        computing_inside_modify_world_block: bool = False,
+        enable_unsafe_inside_world_block: bool = False,
     ) -> None:
         """
         Move ``branch_root`` under ``new_parent``, recreating its parent connection so the connection
@@ -1485,7 +1485,7 @@ class World(HasSimulatorProperties):
 
         :param branch_root: The root of the branch to be moved.
         :param new_parent: The new parent of the branch.
-        :param computing_inside_modify_world_block: If ``True``, compute the preserved pose with
+        :param enable_unsafe_inside_world_block: If ``True``, compute the preserved pose with
             :meth:`_manually_compute_world_root_T_self` instead of the forward kinematics manager. This
             skips the FK recompile and lets the move happen within a single still-open ``modify_world``
             block (used when attaching freshly created entities). It is slower than the FK manager.
@@ -1496,7 +1496,7 @@ class World(HasSimulatorProperties):
         if branch_root.parent_kinematic_structure_entity == new_parent:
             return
 
-        if not computing_inside_modify_world_block:
+        if not enable_unsafe_inside_world_block:
             # Ensure FK is up to date before computing the relative pose; this recompile can be
             # problematic in a large merge-world block, which is what the manual path is for.
             self.update_forward_kinematics()
@@ -1505,7 +1505,7 @@ class World(HasSimulatorProperties):
 
         if isinstance(old_connection, Connection6DoF):
             new_parent_T_branch_root = self.compute_forward_kinematics(
-                new_parent, branch_root, computing_inside_modify_world_block
+                new_parent, branch_root, enable_unsafe_inside_world_block
             )
             new_connection = Connection6DoF.create_with_dofs(
                 parent=new_parent, child=branch_root, world=self
@@ -1518,7 +1518,7 @@ class World(HasSimulatorProperties):
                     self.compute_forward_kinematics(
                         new_parent,
                         old_connection.parent,
-                        computing_inside_modify_world_block,
+                        enable_unsafe_inside_world_block,
                     )
                     @ old_connection.parent_T_connection_expression
                 ).evaluate()
@@ -1870,7 +1870,7 @@ class World(HasSimulatorProperties):
         self,
         root: KinematicStructureEntity,
         tip: KinematicStructureEntity,
-        computing_inside_modify_world_block: bool = False,
+        enable_unsafe_inside_world_block: bool = False,
     ) -> HomogeneousTransformationMatrix:
         """
         Compute the forward kinematics from the root KinematicStructureEntity to the tip KinematicStructureEntity.
@@ -1880,10 +1880,10 @@ class World(HasSimulatorProperties):
 
         :param root: Root KinematicStructureEntity, for which the kinematics are computed.
         :param tip: Tip KinematicStructureEntity, to which the kinematics are computed.
-        :param computing_inside_modify_world_block: Whether to use the forward kinematic manager
+        :param enable_unsafe_inside_world_block: Whether to use the forward kinematic manager
         :return: Transformation matrix representing the relative pose of the tip KinematicStructureEntity with respect to the root KinematicStructureEntity.
         """
-        if not computing_inside_modify_world_block:
+        if not enable_unsafe_inside_world_block:
             return self._forward_kinematic_manager.compute(root, tip)
         return self._manually_compute_entity_a_T_entity_b(root, tip)
 

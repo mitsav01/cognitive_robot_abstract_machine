@@ -402,7 +402,7 @@ class PartWholeRelationship(HasRootKinematicStructureEntity, ABC):
 
         [match] = matches
         part._mount_strategy(self)
-        if match.is_one_to_many_relationship:
+        if match.is_many_to_many_relationship:
             getattr(self, match.field.name).append(part)
         else:
             setattr(self, match.field.name, part)
@@ -504,7 +504,7 @@ class IsStorageSpace(HasRootBody, ABC):
     @synchronized_attribute_modification
     def add_object(self, object: HasRootBody):
         self._world.move_branch(
-            object.root, self.root, computing_inside_modify_world_block=True
+            object.root, self.root, enable_unsafe_inside_world_block=True
         )
         self.objects.append(object)
 
@@ -660,7 +660,7 @@ class HasSupportingSurface(IsStorageSpace, ABC):
     @synchronized_attribute_modification
     def add_supporting_surface(self, region: Region):
         self._world.move_branch(
-            region, self.root, computing_inside_modify_world_block=True
+            region, self.root, enable_unsafe_inside_world_block=True
         )
         self.supporting_surface = region
 

@@ -1358,7 +1358,7 @@ def test_move_branch_preserves_connection_type_and_pose():
 
 def test_move_branch_offline_preserves_connection_type_and_pose():
     """
-    The offline (computing_inside_modify_world_block) path of move_branch must, like the online
+    The offline (enable_unsafe_inside_world_block) path of move_branch must, like the online
     path, preserve a FixedConnection and a Connection6DoF and keep the global pose. The offline path is
     what the semantic-annotation mounts use, and it runs inside an already-open modification block.
     """
@@ -1396,10 +1396,10 @@ def test_move_branch_offline_preserves_connection_type_and_pose():
     free_child_pose = free_child.global_transform
     with world.modify_world():
         world.move_branch(
-            fixed_child, new_parent, computing_inside_modify_world_block=True
+            fixed_child, new_parent, enable_unsafe_inside_world_block=True
         )
         world.move_branch(
-            free_child, new_parent, computing_inside_modify_world_block=True
+            free_child, new_parent, enable_unsafe_inside_world_block=True
         )
 
     assert fixed_child.parent_kinematic_structure_entity == new_parent

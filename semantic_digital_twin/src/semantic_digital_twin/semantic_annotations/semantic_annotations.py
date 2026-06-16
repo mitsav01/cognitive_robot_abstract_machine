@@ -254,7 +254,7 @@ class MechanicalJoint(HasRootBody):
         self._world.move_branch(
             self.root,
             main_has_root_body_annotation.root.parent_kinematic_structure_entity,
-            computing_inside_modify_world_block=True,
+            enable_unsafe_inside_world_block=True,
         )
         main_has_root_body_annotation._world.move_branch(
             main_has_root_body_annotation.root, self.root, True

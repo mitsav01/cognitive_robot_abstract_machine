@@ -102,7 +102,7 @@ class Association(ClassRelation):
     @cached_property
     def one_to_many(self) -> bool:
         """Whether the association is one-to-many (True) or many-to-one (False)."""
-        return self.field.is_one_to_many_relationship and not self.field.is_type_type
+        return self.field.is_many_to_many_relationship and not self.field.is_type_type
 
     def get_key(self, include_field_name: bool = False) -> tuple:
         """
