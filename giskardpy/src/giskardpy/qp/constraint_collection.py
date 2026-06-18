@@ -18,6 +18,9 @@ from giskardpy.qp.constraint import (
     GiskardConstraint,
     GiskardEqualityConstraint,
     GiskardInequalityConstraint,
+    LargeNumber,
+)
+from giskardpy.qp.enforcement_strategy import (
     EnforcementStrategy,
     IntegralStrategy,
     VelocityStrategy,
@@ -26,8 +29,6 @@ from semantic_digital_twin.spatial_types import Point3, Vector3, RotationMatrix
 
 if TYPE_CHECKING:
     from giskardpy.motion_statechart.graph_node import MotionStatechartNode
-
-Large_Number = 1e4
 
 
 @dataclass
@@ -64,13 +65,13 @@ class ConstraintCollection:
             c for c in self._constraints if isinstance(c, GiskardInequalityConstraint)
         ]
 
-    def merge(self, name_prefix: str, other: ConstraintCollection):
+    def merge(self, name_prefix: str, other: ConstraintCollection) -> None:
         for constraint in other._constraints:
             constraint.name = f"{name_prefix}/{constraint.name}"
         self._constraints.extend(other._constraints)
         self._are_names_unique()
 
-    def add_constraint(self, constraint: GiskardConstraint):
+    def add_constraint(self, constraint: GiskardConstraint) -> None:
         constraint.name = constraint.name or f"{len(self._constraints)}"
         existing_names = {c.name for c in self._constraints}
         if constraint.name in existing_names:
@@ -79,7 +80,7 @@ class ConstraintCollection:
             )
         self._constraints.append(constraint)
 
-    def _are_names_unique(self):
+    def _are_names_unique(self) -> None:
         names = set()
         for c in self._constraints:
             if c.name in names:
@@ -93,7 +94,7 @@ class ConstraintCollection:
             v.name for c in self._constraints for v in c.expression.free_variables()
         }
 
-    def link_to_motion_statechart_node(self, node: MotionStatechartNode):
+    def link_to_motion_statechart_node(self, node: MotionStatechartNode) -> None:
         for constraint in self._constraints:
             is_running = sm.if_eq(
                 node.life_cycle_variable,
@@ -110,9 +111,9 @@ class ConstraintCollection:
         quadratic_weight: sm.ScalarData,
         reference_velocity: sm.ScalarData,
         name: Optional[str] = None,
-        lower_slack_limit: sm.ScalarData = -Large_Number,
-        upper_slack_limit: sm.ScalarData = Large_Number,
-    ):
+        lower_slack_limit: sm.ScalarData = -LargeNumber,
+        upper_slack_limit: sm.ScalarData = LargeNumber,
+    ) -> None:
         """
         Add a task constraint to the motion problem. This should be used for most constraints.
         It will not strictly stick to the reference velocity, but requires only a single constraint in the final
@@ -121,7 +122,7 @@ class ConstraintCollection:
                                     enforced.
         :param task_expression: defines the task function
         :param equality_bound: goal for the derivative of task_expression
-        :param weight:
+        :param quadratic_weight: how expensive it is to violate this constraint
         :param name: give this constraint a name, required if you add more than one in the same goal
         :param lower_slack_limit: how much the lower error can be violated, don't use unless you know what you are doing
         :param upper_slack_limit: how much the upper error can be violated, don't use unless you know what you are doing
@@ -157,9 +158,9 @@ class ConstraintCollection:
         task_expression: sm.SymbolicScalar,
         name: Optional[str] = None,
         linear_weight: sm.ScalarData = 0,
-        lower_slack_limit: sm.ScalarData = -Large_Number,
-        upper_slack_limit: sm.ScalarData = Large_Number,
-    ):
+        lower_slack_limit: sm.ScalarData = -LargeNumber,
+        upper_slack_limit: sm.ScalarData = LargeNumber,
+    ) -> None:
         """
         Add a task constraint to the motion problem. This should be used for most constraints.
         It will not strictly stick to the reference velocity, but requires only a single constraint in the final
@@ -204,7 +205,7 @@ class ConstraintCollection:
         reference_velocity: sm.ScalarData,
         quadratic_weight: sm.ScalarData,
         name: Optional[str] = None,
-    ):
+    ) -> None:
         """
         Adds three constraints to move frame_P_current to frame_P_goal.
         Make sure that both points are expressed relative to the same frame!
@@ -232,7 +233,7 @@ class ConstraintCollection:
         reference_velocity: sm.ScalarData,
         quadratic_weight: sm.ScalarData = DefaultWeights.WEIGHT_BELOW_CA,
         name: Optional[str] = None,
-    ):
+    ) -> None:
         """
         A wrapper around add_constraint. Will add a constraint that tries to move expr_current to expr_goal.
         """
@@ -254,7 +255,7 @@ class ConstraintCollection:
         reference_velocity: sm.ScalarData,
         quadratic_weight: sm.ScalarData = DefaultWeights.WEIGHT_BELOW_CA,
         name: Optional[str] = None,
-    ):
+    ) -> None:
         """
         A wrapper around add_constraint. Will add a constraint that tries to move expr_current to expr_goal.
         """
@@ -277,7 +278,7 @@ class ConstraintCollection:
         reference_velocity: sm.ScalarData,
         quadratic_weight: sm.ScalarData = DefaultWeights.WEIGHT_BELOW_CA,
         name: Optional[str] = None,
-    ):
+    ) -> None:
         """
         Adds constraints to align frame_V_current with frame_V_goal. Make sure that both vectors are expressed
         relative to the same frame and are normalized to a length of 1.
@@ -313,7 +314,7 @@ class ConstraintCollection:
         reference_velocity: sm.ScalarData,
         quadratic_weight: sm.ScalarData,
         name: Optional[str] = None,
-    ):
+    ) -> None:
         """
         Adds constraints to move frame_R_current to frame_R_goal. Make sure that both are expressed relative to the same
         frame.
@@ -352,9 +353,9 @@ class ConstraintCollection:
         task_expression: sm.SymbolicScalar,
         velocity_limit: sm.ScalarData,
         name: Optional[str] = None,
-        lower_slack_limit: Union[sm.ScalarData, list[sm.ScalarData]] = -Large_Number,
-        upper_slack_limit: Union[sm.ScalarData, list[sm.ScalarData]] = Large_Number,
-    ):
+        lower_slack_limit: Union[sm.ScalarData, list[sm.ScalarData]] = -LargeNumber,
+        upper_slack_limit: Union[sm.ScalarData, list[sm.ScalarData]] = LargeNumber,
+    ) -> None:
         """
         Add a velocity constraint. Internally, this will be converted into multiple constraints, to ensure that the
         velocity stays within the given bounds.
@@ -389,9 +390,9 @@ class ConstraintCollection:
         task_expression: sm.SymbolicScalar,
         velocity_limit: sm.ScalarData,
         name: Optional[str] = None,
-        lower_slack_limit: Union[sm.ScalarData, list[sm.ScalarData]] = -Large_Number,
-        upper_slack_limit: Union[sm.ScalarData, list[sm.ScalarData]] = Large_Number,
-    ):
+        lower_slack_limit: Union[sm.ScalarData, list[sm.ScalarData]] = -LargeNumber,
+        upper_slack_limit: Union[sm.ScalarData, list[sm.ScalarData]] = LargeNumber,
+    ) -> None:
         """
         Add a velocity constraint. Internally, this will be converted into multiple constraints, to ensure that the
         velocity stays within the given bounds.
@@ -424,7 +425,7 @@ class ConstraintCollection:
         quadratic_weight: Union[sm.Scalar, Vector3, Point3, list[sm.ScalarData]],
         task_expression: Union[sm.Scalar, Vector3, Point3, list[sm.SymbolicScalar]],
         names: list[str],
-    ):
+    ) -> None:
         for i in range(len(velocity_goals)):
             name_suffix = names[i] if names else None
             self.add_velocity_eq_constraint(
@@ -444,7 +445,7 @@ class ConstraintCollection:
         quadratic_weight: sm.ScalarData,
         max_violation: sm.ScalarData = np.inf,
         name: Optional[str] = None,
-    ):
+    ) -> None:
         """
         Adds constraints to limit the translational velocity of frame_P_current. Be aware that the velocity is relative
         to frame.
@@ -473,9 +474,9 @@ class ConstraintCollection:
         frame_R_current: RotationMatrix,
         max_velocity: sm.ScalarData,
         quadratic_weight: sm.ScalarData,
-        max_violation: sm.ScalarData = Large_Number,
+        max_violation: sm.ScalarData = LargeNumber,
         name: Optional[str] = None,
-    ):
+    ) -> None:
         """
         Add velocity constraints to limit the velocity of frame_R_current. Be aware that the velocity is relative to
         frame.

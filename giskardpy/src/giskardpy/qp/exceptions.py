@@ -28,3 +28,11 @@ class EmptyProblemException(InfeasibleException, DontPrintStackTrace):
 
 class MismatchedLimitLengthsError(GiskardException):
     """Raised when the bounds, weights, and names of a DirectLimits do not all share the same length."""
+
+
+class ConstraintTypeMismatchError(QPSolverException):
+    """Raised when an enforcement strategy receives a constraint of the wrong type for the requested bounds."""
+
+
+class NoFactoryForQPDataTypeError(QPSolverException):
+    """Raised when no registered factory handles the requested QPData type."""

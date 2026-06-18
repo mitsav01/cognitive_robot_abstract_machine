@@ -9,9 +9,9 @@ from typing_extensions import (
     Generic,
     TypeVar,
     get_args,
-    assert_never,
 )
 
+from giskardpy.qp.exceptions import NoFactoryForQPDataTypeError
 from giskardpy.qp.qp_data import QPData, QPDataExplicit, QPDataTwoSidedInequality
 from krrood.symbolic_math.symbolic_math import (
     CompiledFunctionWithViews,
@@ -42,7 +42,6 @@ class QPDataFactory(Generic[T], ABC):
     """
 
     @classmethod
-    @property
     def qp_data_type(cls) -> type[T]:
         """
         The semDT type for which this converter handles conversion.
@@ -57,9 +56,11 @@ class QPDataFactory(Generic[T], ABC):
         Returns the factory that handles conversion for the given QPData type.
         """
         for subclass in cls.__subclasses__():
-            if subclass.qp_data_type == qp_data_type:
+            if subclass.qp_data_type() == qp_data_type:
                 return subclass
-        assert_never(qp_data_type)
+        raise NoFactoryForQPDataTypeError(
+            f"No QPDataFactory registered for QPData type {qp_data_type.__name__}."
+        )
 
     @abstractmethod
     def compile(
@@ -312,7 +313,7 @@ class QPDataTwoSidedInequalityFactory(QPDataFactory[QPDataTwoSidedInequality]):
             box_eq_neq_lower_bounds_np_raw,
             box_eq_neq_upper_bounds_np_raw,
         ) = self.combined_vector_f(*args)
-        self.qp_data_raw = QPDataTwoSidedInequality(
+        return QPDataTwoSidedInequality(
             quadratic_weights=quadratic_weights_np_raw,
             linear_weights=linear_weights_np_raw,
             inequality_matrix=neq_matrix,
@@ -321,5 +322,3 @@ class QPDataTwoSidedInequalityFactory(QPDataFactory[QPDataTwoSidedInequality]):
             num_equality_slack_variables=self.qp_data.num_eq_slack_variables,
             num_inequality_slack_variables=self.qp_data.num_neq_slack_variables,
         )
-
-        return self.qp_data_raw

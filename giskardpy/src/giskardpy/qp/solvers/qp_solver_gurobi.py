@@ -6,7 +6,7 @@ from typing import Tuple, Dict
 
 import gurobipy
 import numpy as np
-from gurobipy import GRB, GurobiError
+from gurobipy import GRB
 
 from giskardpy.qp.exceptions import QPSolverException, InfeasibleException
 from giskardpy.qp.qp_data import QPDataExplicit
@@ -87,16 +87,14 @@ class QPSolverGurobi(QPSolver[QPDataExplicit]):
             xQ_R=self.x,
             sense=GRB.MINIMIZE,
         )
-        try:
+        if qp_data.equality_matrix.shape[0] * qp_data.equality_matrix.shape[1] != 0:
             self.qpProblem.addMConstr(
                 qp_data.equality_matrix,
                 self.x,
                 gurobipy.GRB.EQUAL,
                 qp_data.equality_bounds,
             )
-        except (GurobiError, ValueError) as e:
-            pass  # no eq constraints
-        try:
+        if qp_data.inequality_matrix.shape[0] * qp_data.inequality_matrix.shape[1] != 0:
             self.qpProblem.addMConstr(
                 qp_data.inequality_matrix,
                 self.x,
@@ -109,8 +107,6 @@ class QPSolverGurobi(QPSolver[QPDataExplicit]):
                 gurobipy.GRB.LESS_EQUAL,
                 qp_data.inequality_upper_bounds,
             )
-        except (GurobiError, ValueError) as e:
-            pass  # no neq constraints
 
     def print_debug(self):
         gurobipy.setParam(gurobipy.GRB.Param.LogToConsole, True)

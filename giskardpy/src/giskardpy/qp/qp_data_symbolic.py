@@ -1,17 +1,13 @@
 from __future__ import annotations
 
 import logging
-from abc import ABC
-from abc import abstractmethod
 from dataclasses import dataclass, field
 from typing import List, TYPE_CHECKING
 
-import numpy as np
-
 import krrood.symbolic_math.symbolic_math as sm
-from giskardpy.qp.constraint import (
-    DirectLimits,
-    DofLimits,
+from giskardpy.qp.dof_limits import DofLimits
+from giskardpy.qp.enforcement_strategy import (
+    EnforcementStrategy,
     SystemDynamicsStrategy,
 )
 from giskardpy.qp.constraint_collection import ConstraintCollection
@@ -79,6 +75,22 @@ class QPDataSymbolic:
         self.eq_constraint_names = []
         self.free_variable_names = direct_limits.names
 
+        def register_slack_block(
+            strategy: EnforcementStrategy, constraint_names: list[str]
+        ) -> tuple[Matrix, Matrix]:
+            """
+            Appends the strategy's slack weights, box bounds, and names to the shared lists and
+            returns its constraint matrix and slack matrix.
+            """
+            slack_variables = strategy.create_slack_variables()
+            quadratic_weights.append(slack_variables.quadratic_weights)
+            linear_weights.append(slack_variables.linear_weights)
+            box_lower_constraints.append(slack_variables.lower_bounds)
+            box_upper_constraints.append(slack_variables.upper_bounds)
+            constraint_names.extend(strategy.create_names())
+            self.free_variable_names.extend(slack_variables.names)
+            return strategy.create_matrix(), strategy.create_slack_matrix()
+
         system_dynamics_strategy = SystemDynamicsStrategy(
             degrees_of_freedom=self.degrees_of_freedom,
             config=self.config,
@@ -98,21 +110,12 @@ class QPDataSymbolic:
                 config=self.config,
                 constraints=constraints,
             )
-
-            slack_variables = strategy.create_slack_variables()
-            quadratic_weights.append(slack_variables.quadratic_weights)
-            linear_weights.append(slack_variables.linear_weights)
-            box_lower_constraints.append(slack_variables.lower_bounds)
-            box_upper_constraints.append(slack_variables.upper_bounds)
-
-            matrix = strategy.create_matrix()
-            slack_matrix = strategy.create_slack_matrix()
-            bounds = strategy.create_equality_bounds()
+            matrix, slack_matrix = register_slack_block(
+                strategy, self.eq_constraint_names
+            )
             eq_matrix_dofs.append(matrix)
             eq_matrix_slack.append(slack_matrix)
-            eq_bounds.append(bounds)
-            self.eq_constraint_names.extend(strategy.create_names())
-            self.free_variable_names.extend(slack_variables.names)
+            eq_bounds.append(strategy.create_equality_bounds())
 
         for (
             enforcement_strategy,
@@ -123,23 +126,13 @@ class QPDataSymbolic:
                 config=self.config,
                 constraints=constraints,
             )
-
-            slack_variables = strategy.create_slack_variables()
-            quadratic_weights.append(slack_variables.quadratic_weights)
-            linear_weights.append(slack_variables.linear_weights)
-            box_lower_constraints.append(slack_variables.lower_bounds)
-            box_upper_constraints.append(slack_variables.upper_bounds)
-
-            matrix = strategy.create_matrix()
-            slack_matrix = strategy.create_slack_matrix()
-            lower_bound = strategy.create_lower_bounds()
-            upper_bound = strategy.create_upper_bounds()
+            matrix, slack_matrix = register_slack_block(
+                strategy, self.neq_constraint_names
+            )
             ineq_matrix_dofs.append(matrix)
             ineq_matrix_slack.append(slack_matrix)
-            lower_bounds.append(lower_bound)
-            upper_bounds.append(upper_bound)
-            self.neq_constraint_names.extend(strategy.create_names())
-            self.free_variable_names.extend(slack_variables.names)
+            lower_bounds.append(strategy.create_lower_bounds())
+            upper_bounds.append(strategy.create_upper_bounds())
 
         self.quadratic_weights = sm.concatenate(*quadratic_weights)
         self.linear_weights = sm.concatenate(*linear_weights)

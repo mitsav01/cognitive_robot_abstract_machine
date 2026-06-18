@@ -53,10 +53,8 @@ from giskardpy.motion_statechart.test_nodes.test_nodes import (
     TestEndBeforeStart,
     TestUnpauseUnknownFromParentPause,
 )
-from giskardpy.qp.constraint import (
-    IntegralStrategy,
-    GiskardEqualityConstraint,
-)
+from giskardpy.qp.constraint import GiskardEqualityConstraint
+from giskardpy.qp.enforcement_strategy import IntegralStrategy
 from giskardpy.qp.constraint_collection import ConstraintCollection
 from krrood.symbolic_math.symbolic_math import (
     trinary_logic_and,

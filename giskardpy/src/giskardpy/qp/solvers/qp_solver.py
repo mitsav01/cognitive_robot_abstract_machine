@@ -15,7 +15,6 @@ T = TypeVar("T", QPDataExplicit, QPDataTwoSidedInequality)
 class QPSolver(Generic[T]):
 
     @classmethod
-    @property
     def qp_data_type(cls) -> Type[T]:
         """
         The semDT type for which this converter handles conversion.

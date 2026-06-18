@@ -57,7 +57,7 @@ class QPController:
         )
 
         qp_data_factory_class = QPDataFactory.get_factory_from_qp_data_type(
-            self.qp_solver.qp_data_type
+            self.qp_solver.qp_data_type()
         )
         self.qp_data_factory = qp_data_factory_class(generic_qp_data_symbolic)
         self.qp_data_factory.compile(
@@ -69,7 +69,7 @@ class QPController:
             qp_data_symbolic=self.qp_data_factory.qp_data
         )
 
-    def _set_active_dofs(self, degrees_of_freedom: List[DegreeOfFreedom]):
+    def _set_active_dofs(self, degrees_of_freedom: List[DegreeOfFreedom]) -> None:
         all_active_float_variables = set().union(
             *[
                 {

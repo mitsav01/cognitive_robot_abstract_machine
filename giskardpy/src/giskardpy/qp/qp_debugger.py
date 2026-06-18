@@ -3,19 +3,13 @@ from __future__ import annotations
 import datetime
 import logging
 from dataclasses import dataclass, field
-from typing import Optional, TYPE_CHECKING
 
 import numpy as np
-import pandas
 import pandas as pd
 
 from giskardpy.qp.qp_data_symbolic import QPDataSymbolic
-from giskardpy.utils.utils import create_path
 
 logger = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    pass
 
 date_str = datetime.datetime.now().strftime("%Yy-%mm-%dd--%Hh-%Mm-%Ss")
 
@@ -35,28 +29,28 @@ class QuadraticProgramDebugger:
     """
     The solution of the QP, None if there is none.
     """
-    direct_limits: pandas.DataFrame = field(init=False)
+    direct_limits: pd.DataFrame = field(init=False)
     """
     This panda array gives you insights into the decision variables of the QP.
     It contains columns for direct upper and lower bounds, last solution and weights.
     """
-    equality_constraints: pandas.DataFrame = field(init=False)
+    equality_constraints: pd.DataFrame = field(init=False)
     """
     This panda array gives insight in the equality constraints.
     It contains columns for the equality bounds, the result of the equality matrix * decision variables (without slack),
     and the slack, which is essentially how much the constraints are violated. 
     """
-    equality_matrix: pandas.DataFrame = field(init=False)
+    equality_matrix: pd.DataFrame = field(init=False)
     """
     Panda array representing the equality constraint matrix.
     """
-    inequality_constraints: pandas.DataFrame = field(init=False)
+    inequality_constraints: pd.DataFrame = field(init=False)
     """
     Panda array giving insights into the inequality constraints.
     It contains columns for the inequality bounds, the result of the inequality matrix * decision variables (without slack),
     and the slack, which is essentially how much the constraints are violated. 
     """
-    inequality_matrix: pandas.DataFrame = field(init=False)
+    inequality_matrix: pd.DataFrame = field(init=False)
     """
     Panda array representing the inequality constraint matrix.
     """
@@ -64,7 +58,7 @@ class QuadraticProgramDebugger:
     def __post_init__(self):
         self.update(self.current_solution)
 
-    def update(self, current_solution: np.ndarray):
+    def update(self, current_solution: np.ndarray) -> None:
         """
         Updates the debugger with a new solution.
         """
@@ -96,7 +90,7 @@ class QuadraticProgramDebugger:
         )
         return quadratic_weight_filter.astype(bool)
 
-    def create_direct_limits(self):
+    def create_direct_limits(self) -> None:
         """
         Creates a panda array for decision variable insights.
         """
@@ -112,7 +106,7 @@ class QuadraticProgramDebugger:
             dtype=float,
         )
 
-    def create_equality_constraints(self):
+    def create_equality_constraints(self) -> None:
         """
         Creates panda arrays for equality constraint insights.
         """
@@ -137,7 +131,7 @@ class QuadraticProgramDebugger:
             dtype=float,
         )
 
-    def create_inequality_constraints(self):
+    def create_inequality_constraints(self) -> None:
         """
         Creates panda arrays for inequality constraint insights.
         """

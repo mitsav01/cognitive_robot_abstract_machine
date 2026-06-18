@@ -4,16 +4,30 @@ import numpy as np
 
 import pytest
 
-from giskardpy.qp.constraint import (
-    DirectLimits,
-    DofLimits,
+from giskardpy.qp.dof_limits import DirectLimits, DofLimits
+from giskardpy.qp.enforcement_strategy import (
     SystemDynamicsStrategy,
     IntegralStrategy,
+    VelocityStrategy,
+    ExpressionEnforcementStrategy,
 )
-from giskardpy.qp.exceptions import MismatchedLimitLengthsError
+from giskardpy.qp.exceptions import (
+    MismatchedLimitLengthsError,
+    ConstraintTypeMismatchError,
+    NoFactoryForQPDataTypeError,
+)
 from giskardpy.qp.constraint_collection import ConstraintCollection
 from giskardpy.qp.qp_controller_config import QPControllerConfig
-from giskardpy.qp.qp_data_factories import QPDataExplicitFactory
+from giskardpy.qp.qp_data import (
+    QPData,
+    QPDataExplicit,
+    QPDataTwoSidedInequality,
+)
+from giskardpy.qp.qp_data_factories import (
+    QPDataFactory,
+    QPDataExplicitFactory,
+    QPDataTwoSidedInequalityFactory,
+)
 from giskardpy.qp.qp_data_symbolic import QPDataSymbolic
 from giskardpy.qp.qp_debugger import QuadraticProgramDebugger
 from giskardpy.qp.solvers.qp_solver_piqp import QPSolverPIQP
@@ -288,6 +302,76 @@ def test_integral_strategy_with_inequality_constraints(prismatic_bot2):
     assert ineq_constraint_model.create_slack_matrix()[0, 0] == (1 / target_frequency)
 
 
+def test_velocity_strategy_builds_inequality_blocks(prismatic_bot2):
+    target_frequency = 20
+    prediction_horizon = 10
+    time_step = 1 / target_frequency
+    control_horizon = prediction_horizon - 2
+    constraints = ConstraintCollection()
+    dof1 = prismatic_bot2.active_degrees_of_freedom[0]
+    constraints.add_velocity_constraint(
+        task_expression=dof1.variables.position,
+        lower_velocity_limit=-0.5,
+        upper_velocity_limit=0.5,
+        quadratic_weight=1,
+        velocity_limit=0.5,
+        name="velocity_constraint",
+    )
+    velocity_strategy = VelocityStrategy(
+        degrees_of_freedom=prismatic_bot2.active_degrees_of_freedom,
+        constraints=constraints.inequality_constraints,
+        config=QPControllerConfig(
+            target_frequency=target_frequency, prediction_horizon=prediction_horizon
+        ),
+    )
+    assert velocity_strategy.create_matrix().shape[0] == control_horizon
+    slack_variables = velocity_strategy.create_slack_variables()
+    assert len(slack_variables.names) == control_horizon
+    lower_bounds = velocity_strategy.create_lower_bounds()
+    upper_bounds = velocity_strategy.create_upper_bounds()
+    assert len(lower_bounds) == control_horizon
+    assert np.allclose(lower_bounds.to_np(), -0.5 * time_step)
+    assert np.allclose(upper_bounds.to_np(), 0.5 * time_step)
+
+
+def test_inequality_bounds_on_equality_strategy_raise(prismatic_bot2):
+    constraints = ConstraintCollection()
+    dof1 = prismatic_bot2.active_degrees_of_freedom[0]
+    constraints.add_equality_constraint(
+        task_expression=dof1.variables.position,
+        equality_bound=1,
+        quadratic_weight=1,
+        reference_velocity=1,
+    )
+    strategy = IntegralStrategy(
+        degrees_of_freedom=prismatic_bot2.active_degrees_of_freedom,
+        constraints=constraints.equality_constraints,
+        config=QPControllerConfig(target_frequency=20, prediction_horizon=10),
+    )
+    with pytest.raises(ConstraintTypeMismatchError):
+        strategy.create_lower_bounds()
+    with pytest.raises(ConstraintTypeMismatchError):
+        strategy.create_upper_bounds()
+
+
+def test_system_dynamics_strategy_is_not_an_expression_strategy(prismatic_bot2):
+    strategy = SystemDynamicsStrategy(
+        degrees_of_freedom=prismatic_bot2.active_degrees_of_freedom,
+        constraints=[],
+        config=QPControllerConfig(target_frequency=20, prediction_horizon=10),
+    )
+    assert not isinstance(strategy, ExpressionEnforcementStrategy)
+    assert not hasattr(strategy, "create_lower_bounds")
+    assert isinstance(
+        IntegralStrategy(
+            degrees_of_freedom=prismatic_bot2.active_degrees_of_freedom,
+            constraints=[],
+            config=QPControllerConfig(target_frequency=20, prediction_horizon=10),
+        ),
+        ExpressionEnforcementStrategy,
+    )
+
+
 def test_qp_data_symbolic(prismatic_bot2):
     constraints = ConstraintCollection()
     dof1 = prismatic_bot2.active_degrees_of_freedom[0]
@@ -337,3 +421,60 @@ def test_qp_data_symbolic(prismatic_bot2):
     )
     assert len(debugger.inequality_constraints) == 1
     assert len(debugger.equality_constraints) == 22
+
+
+def _build_qp_data_symbolic(prismatic_bot2) -> QPDataSymbolic:
+    constraints = ConstraintCollection()
+    dof1 = prismatic_bot2.active_degrees_of_freedom[0]
+    constraints.add_equality_constraint(
+        task_expression=dof1.variables.position,
+        equality_bound=1,
+        quadratic_weight=1,
+        reference_velocity=1,
+        name="position_constraint",
+    )
+    constraints.add_inequality_constraint(
+        task_expression=dof1.variables.position,
+        lower_error=0.1,
+        upper_error=1,
+        quadratic_weight=1,
+        reference_velocity=1,
+        name="ineq constraint",
+    )
+    return QPDataSymbolic(
+        degrees_of_freedom=prismatic_bot2.active_degrees_of_freedom,
+        constraint_collection=constraints,
+        config=QPControllerConfig(target_frequency=20, prediction_horizon=10),
+    )
+
+
+def test_two_sided_factory_evaluate_returns_fresh_object(prismatic_bot2):
+    qp_data_symbolic = _build_qp_data_symbolic(prismatic_bot2)
+    factory = QPDataTwoSidedInequalityFactory(qp_data_symbolic)
+    factory.compile(
+        world_state_symbols=prismatic_bot2.state.get_variables(),
+        life_cycle_symbols=[],
+        float_variables=[],
+    )
+    qp_data = factory.evaluate(
+        world_state=prismatic_bot2.state._data,
+        life_cycle_state=np.array([]),
+        float_variables=np.array([]),
+    )
+    assert isinstance(qp_data, QPDataTwoSidedInequality)
+    assert not hasattr(factory, "qp_data_raw")
+
+
+def test_get_factory_for_unregistered_type_raises():
+    class UnregisteredQPData(QPData):
+        def apply_filters(self):
+            return self
+
+    with pytest.raises(NoFactoryForQPDataTypeError):
+        QPDataFactory.get_factory_from_qp_data_type(UnregisteredQPData)
+
+
+def test_qp_data_type_is_a_classmethod():
+    assert QPSolverPIQP.qp_data_type() is QPDataExplicit
+    assert QPDataExplicitFactory.qp_data_type() is QPDataExplicit
+    assert QPDataTwoSidedInequalityFactory.qp_data_type() is QPDataTwoSidedInequality
