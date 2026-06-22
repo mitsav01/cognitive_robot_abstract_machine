@@ -53,7 +53,9 @@ def test_has_hardware_interface_round_trip(world_with_two_bodies, drive_type):
 
 
 @pytest.mark.parametrize("drive_type", [OmniDrive, DifferentialDrive])
-def test_has_hardware_interface_reflects_any_active_dof(world_with_two_bodies, drive_type):
+def test_has_hardware_interface_reflects_any_active_dof(
+    world_with_two_bodies, drive_type
+):
     connection = _add_drive(world_with_two_bodies, drive_type)
     connection.yaw.has_hardware_interface = True
     assert connection.has_hardware_interface
