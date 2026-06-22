@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from uuid import UUID
 
 import numpy as np
-from typing_extensions import List, TYPE_CHECKING, Union, Optional, Dict, Any, Self
+from typing_extensions import list, TYPE_CHECKING, Union, Optional, Dict, Any, Self
 
 from krrood.adapters.json_serializer import from_json, to_json
 from semantic_digital_twin.world_description.connection_properties import JointDynamics
@@ -241,7 +241,7 @@ class ActiveConnection1DOF(ActiveConnection, ABC):
         return result
 
     @property
-    def active_dofs(self) -> List[DegreeOfFreedom]:
+    def active_dofs(self) -> list[DegreeOfFreedom]:
         return [self.raw_dof]
 
     @property
@@ -501,7 +501,7 @@ class Connection6DoF(Connection):
         )
 
     @property
-    def passive_dofs(self) -> List[DegreeOfFreedom]:
+    def passive_dofs(self) -> list[DegreeOfFreedom]:
         return [self.x, self.y, self.z, self.qx, self.qy, self.qz, self.qw]
 
     @property
@@ -742,11 +742,11 @@ class OmniDrive(WheeledDrive):
         )
 
     @property
-    def active_dofs(self) -> List[DegreeOfFreedom]:
+    def active_dofs(self) -> list[DegreeOfFreedom]:
         return [self.x_velocity, self.y_velocity, self.yaw]
 
     @property
-    def passive_dofs(self) -> List[DegreeOfFreedom]:
+    def passive_dofs(self) -> list[DegreeOfFreedom]:
         return [self.x, self.y, self.roll, self.pitch]
 
     def update_state(self, dt: float) -> None:
@@ -784,7 +784,7 @@ class OmniDrive(WheeledDrive):
         self._world.state[self.yaw.id].position = yaw
         self._world.notify_state_change()
 
-    def get_free_variable_names(self) -> List[UUID]:
+    def get_free_variable_names(self) -> list[UUID]:
         return [self.x.id, self.y.id, self.yaw.id]
 
     def copy_for_world(self, world: World) -> OmniDrive:
@@ -807,13 +807,13 @@ class OmniDrive(WheeledDrive):
             child=other_child,
             parent_T_connection_expression=parent_T_connection_expression,
             connection_T_child_expression=connection_T_child_expression,
-            x=world.get_degree_of_freedom_by_id(deepcopy(self.x.id)),
-            y=world.get_degree_of_freedom_by_id(deepcopy(self.y.id)),
-            roll=world.get_degree_of_freedom_by_id(deepcopy(self.roll.id)),
-            pitch=world.get_degree_of_freedom_by_id(deepcopy(self.pitch.id)),
-            yaw=world.get_degree_of_freedom_by_id(deepcopy(self.yaw.id)),
-            x_velocity=world.get_degree_of_freedom_by_id(deepcopy(self.x_velocity.id)),
-            y_velocity=world.get_degree_of_freedom_by_id(deepcopy(self.y_velocity.id)),
+            x=world.get_degree_of_freedom_by_id(self.x.id),
+            y=world.get_degree_of_freedom_by_id(self.y.id),
+            roll=world.get_degree_of_freedom_by_id(self.roll.id),
+            pitch=world.get_degree_of_freedom_by_id(self.pitch.id),
+            yaw=world.get_degree_of_freedom_by_id(self.yaw.id),
+            x_velocity=world.get_degree_of_freedom_by_id(self.x_velocity.id),
+            y_velocity=world.get_degree_of_freedom_by_id(self.y_velocity.id),
         )
 
 
@@ -983,11 +983,11 @@ class DifferentialDrive(WheeledDrive):
         )
 
     @property
-    def active_dofs(self) -> List[DegreeOfFreedom]:
+    def active_dofs(self) -> list[DegreeOfFreedom]:
         return [self.x_velocity, self.yaw]
 
     @property
-    def passive_dofs(self) -> List[DegreeOfFreedom]:
+    def passive_dofs(self) -> list[DegreeOfFreedom]:
         return [self.x, self.y, self.roll, self.pitch]
 
     def update_state(self, dt: float) -> None:
@@ -1023,7 +1023,7 @@ class DifferentialDrive(WheeledDrive):
         self._world.state[self.yaw.id].position = yaw
         self._world.notify_state_change()
 
-    def get_free_variable_names(self) -> List[UUID]:
+    def get_free_variable_names(self) -> list[UUID]:
         return [self.x.id, self.y.id, self.yaw.id]
 
     def copy_for_world(self, world: World) -> DifferentialDrive:
