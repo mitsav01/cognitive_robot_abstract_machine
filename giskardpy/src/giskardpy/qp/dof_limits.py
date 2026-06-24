@@ -29,6 +29,7 @@ from giskardpy.qp.solvers.qp_solver import QPSolver
 from giskardpy.utils.math import mpc
 from krrood.symbolic_math.symbolic_math import Scalar, FloatVariable
 from semantic_digital_twin.spatial_types.derivatives import Derivatives, DerivativeMap
+from semantic_digital_twin.world_description import degree_of_freedom
 from semantic_digital_twin.world_description.degree_of_freedom import DegreeOfFreedom
 from semantic_digital_twin.world_description.degree_of_freedom import (
     DegreeOfFreedomLimits,
@@ -197,7 +198,7 @@ class DegreeOfFreedomLimitProfiler:
 
     def _compute_position_constrained_velocity_bounds(
         self,
-        dof_symbols: DerivativeMap[FloatVariable],
+        degree_of_freedom_symbols: DerivativeMap[FloatVariable],
         lower_limits: DerivativeMap[float],
         upper_limits: DerivativeMap[float],
         solver_class: type[QPSolver],
@@ -230,7 +231,7 @@ class DegreeOfFreedomLimitProfiler:
         velocity_lower_bound = self._directional_velocity_bound(
             mpc_velocity_profile=mpc_velocity_profile,
             mpc_acceleration_profile=mpc_acceleration_profile,
-            position_error=lower_limits.position - dof_symbols.position,
+            position_error=lower_limits.position - degree_of_freedom_symbols.position,
             jerk_limit=jerk_limit,
             velocity_limit=velocity_limit,
             time_step=time_step,
@@ -239,7 +240,7 @@ class DegreeOfFreedomLimitProfiler:
         velocity_upper_bound = self._directional_velocity_bound(
             mpc_velocity_profile=mpc_velocity_profile,
             mpc_acceleration_profile=mpc_acceleration_profile,
-            position_error=upper_limits.position - dof_symbols.position,
+            position_error=upper_limits.position - degree_of_freedom_symbols.position,
             jerk_limit=jerk_limit,
             velocity_limit=velocity_limit,
             time_step=time_step,
@@ -344,7 +345,7 @@ class DegreeOfFreedomLimitProfiler:
 
     def compute_horizon_bounds(
         self,
-        dof_symbols: DerivativeMap[FloatVariable],
+        degree_of_freedom_symbols: DerivativeMap[FloatVariable],
         lower_limits: DerivativeMap[float],
         upper_limits: DerivativeMap[float],
         solver_class: type[QPSolver],
@@ -361,7 +362,7 @@ class DegreeOfFreedomLimitProfiler:
         acceleration_limit = upper_limits.acceleration
 
         velocity_bounds = self._compute_position_constrained_velocity_bounds(
-            dof_symbols=dof_symbols,
+            degree_of_freedom_symbols=degree_of_freedom_symbols,
             lower_limits=lower_limits,
             upper_limits=upper_limits,
             solver_class=solver_class,
@@ -378,7 +379,7 @@ class DegreeOfFreedomLimitProfiler:
 
         projected_velocity_profile, projected_jerk_profile_violated = (
             self._project_velocity_profiles(
-                dof_symbols=dof_symbols,
+                degree_of_freedom_symbols=degree_of_freedom_symbols,
                 goal_profile=velocity_bounds.goal_profile,
                 jerk_limit=jerk_limit,
                 time_step=time_step,
@@ -408,7 +409,7 @@ class DegreeOfFreedomLimitProfiler:
 
     def _project_velocity_profiles(
         self,
-        dof_symbols: DerivativeMap[FloatVariable],
+        degree_of_freedom_symbols: DerivativeMap[FloatVariable],
         goal_profile: sm.Vector,
         jerk_limit: float,
         time_step: float,
@@ -420,8 +421,8 @@ class DegreeOfFreedomLimitProfiler:
         the jerk profile that would be required without a jerk limit.
         """
         projected_velocity_profile, _, _ = compute_immediate_slowdown_profile(
-            dof_symbols.velocity,
-            dof_symbols.acceleration,
+            degree_of_freedom_symbols.velocity,
+            degree_of_freedom_symbols.acceleration,
             goal_profile,
             Scalar(jerk_limit),
             Scalar(time_step),
@@ -429,8 +430,8 @@ class DegreeOfFreedomLimitProfiler:
             skip_first,
         )
         _, _, projected_jerk_profile_violated = compute_immediate_slowdown_profile(
-            dof_symbols.velocity,
-            dof_symbols.acceleration,
+            degree_of_freedom_symbols.velocity,
+            degree_of_freedom_symbols.acceleration,
             goal_profile,
             Scalar(np.inf),
             Scalar(time_step),
@@ -613,7 +614,7 @@ class DegreeOfFreedomLimitProfiler:
         lower_limits, upper_limits = self._resolve_limits(degree_of_freedom)
         try:
             return self.compute_horizon_bounds(
-                dof_symbols=degree_of_freedom.variables,
+                degree_of_freedom_symbols=degree_of_freedom.variables,
                 lower_limits=lower_limits,
                 upper_limits=upper_limits,
                 solver_class=qp_controller_config.qp_solver_class,
@@ -758,9 +759,9 @@ class QuadraticProgramDegreeOfFreedomLimits:
         for derivative, t, degree_of_freedom in self.active_slots(
             degrees_of_freedom, qp_controller_config
         ):
-            normalized_weight = self.normalize_dof_weight(
+            normalized_weight = self.normalize_degree_of_freedom_weight(
                 variable_limit=degree_of_freedom.limits.upper[derivative],
-                base_weight=qp_controller_config.get_dof_weight(
+                base_weight=qp_controller_config.get_degree_of_freedom_weight(
                     degree_of_freedom.name, derivative
                 ),
                 horizon_index=t,
@@ -770,7 +771,7 @@ class QuadraticProgramDegreeOfFreedomLimits:
             quadratic_weights.append(normalized_weight)
         return sm.Vector(quadratic_weights), sm.Vector.zeros(len(quadratic_weights))
 
-    def normalize_dof_weight(
+    def normalize_degree_of_freedom_weight(
         self,
         variable_limit: float | None,
         base_weight: float,

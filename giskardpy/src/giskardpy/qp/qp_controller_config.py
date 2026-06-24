@@ -168,7 +168,9 @@ class QPControllerConfig:
         """
         self.dof_weights[dof_name] = weight_map
 
-    def get_dof_weight(self, dof_name: PrefixedName, derivative: Derivatives) -> float:
+    def get_degree_of_freedom_weight(
+        self, dof_name: PrefixedName, derivative: Derivatives
+    ) -> float:
         """
         Returns the objective weight of a single degree-of-freedom derivative.
         """
