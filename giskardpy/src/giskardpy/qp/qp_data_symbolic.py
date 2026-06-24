@@ -51,7 +51,7 @@ class QPVariableAccumulator:
     """
 
 
-@dataclass
+@dataclass(eq=False)
 class QPDataSymbolic:
     """
     Takes free variables and constraints and converts them to a QP problem in the following format, depending on the
@@ -289,9 +289,6 @@ class QPDataSymbolic:
         Concatenates the bound blocks, returning an empty vector when there are no blocks.
         """
         return sm.concatenate(*blocks) if blocks else sm.Vector()
-
-    def __hash__(self):
-        return hash(id(self))
 
     @property
     def number_degrees_of_freedom(self) -> int:
