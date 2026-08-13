@@ -206,3 +206,64 @@ class NavigateActionServerTask(
                 else ObservationStateValues.FALSE
             )
         return ObservationStateValues.UNKNOWN
+<<<<<<< HEAD
+=======
+
+
+@dataclass(eq=False, repr=False)
+class RobotiqGripperActionServerTask(
+    ActionServerTask[
+        ParallelGripperCommand,
+        ParallelGripperCommand.Goal,
+        ParallelGripperCommand.Result,
+        ParallelGripperCommand.Feedback,
+    ]
+):
+    """
+    Node for calling a Robotiq ROS2 action server using the
+    control_msgs/ParallelGripperCommand interface.
+    """
+
+    target_position: float
+    """
+    Desired gripper opening in meters.
+
+    Examples:
+        0.0   -> Fully closed
+        0.7 -> Fully open
+    """
+
+    target_velocity: float = 10.0
+    """
+    Desired gripper velocity.
+    """
+
+    target_effort: float = 10.0
+    """
+    Maximum gripping effort.
+    """
+
+    def build_msg(self, context: MotionStatechartContext):
+        """
+        Builds the ParallelGripperCommand goal message.
+
+        """
+
+        self._msg = ParallelGripperCommand.Goal()
+
+        self._msg.command.position = [float(self.target_position)]
+        self._msg.command.velocity = [float(self.target_velocity)]
+        self._msg.command.effort = [float(self.target_effort)]
+
+    def result_callback(self, future):
+        """
+        Stores the gripper action result returned by the action server.
+        """
+        super().result_callback(future)
+
+        logger.info(
+            f"Gripper action finished. "
+            f"Reached goal: {self._result.result.reached_goal}, "
+            f"Stalled: {self._result.result.stalled}"
+        )
+>>>>>>> 955027106 (Refactor Tiago and Tracy gripper motion mappings)

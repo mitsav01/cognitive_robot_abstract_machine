@@ -1,50 +1,32 @@
-from giskardpy.motion_statechart.goals.cartesian_goals import DifferentialDriveBaseGoal
-from coraplex.datastructures.enums import ExecutionType
-from coraplex.robot_plans import MoveMotion
-from coraplex.robot_plans.motions.base import AlternativeMotion
-from semantic_digital_twin.robots.tiago import Tiago
-<<<<<<< HEAD
-
-
-class TiagoMoveSim(MoveMotion, AlternativeMotion[Tiago]):
-    """
-    Uses a diff drive goal for the tiago base.
-    """
-
-    execution_type = ExecutionType.SIMULATED
-
-    def perform(self):
-        return
-
-    @property
-    def _motion_chart(self):
-
-        return DifferentialDriveBaseGoal(
-            goal_pose=self.target,
-=======
+import logging
+from dataclasses import dataclass
 from semantic_digital_twin.datastructures.definitions import GripperState
-from giskardpy.motion_statechart.ros2_nodes.ros_tasks import RobotiqGripperActionServerTask
 from giskardpy.motion_statechart.goals.templates import Parallel
+from giskardpy.motion_statechart.ros2_nodes.ros_tasks import (
+    RobotiqGripperActionServerTask,
+)
 from control_msgs.action import ParallelGripperCommand
+from semantic_digital_twin.robots.tracy import Tracy
 from coraplex.datastructures.enums import ExecutionType, Arms
 from coraplex.view_manager import ViewManager
 from coraplex.robot_plans import (
-    MoveMotion,
+    MoveJointsMotion,
     MoveToolCenterPointMotion,
     LookingMotion,
     MoveGripperMotion,
 )
+from coraplex.robot_plans.motions.base import AlternativeMotion
 
 logger = logging.getLogger(__name__)
 
-@dataclass
-class TiagoGripperMotion(MoveGripperMotion, AlternativeMotion[Tiago]):
+
+@dataclass(kw_only=True)
+class TracyGripperMotion(MoveGripperMotion, AlternativeMotion[Tracy]):
     """
-    Uses RobotiqGripperActionServerTask to move Tiago's gripper.
+    Uses RobotiqGripperActionServerTask to move Tracy's gripper.
     """
 
     execution_type = ExecutionType.REAL
-
 
     @property
     def _motion_chart(self) -> RobotiqGripperActionServerTask | Parallel:
@@ -86,6 +68,4 @@ class TiagoGripperMotion(MoveGripperMotion, AlternativeMotion[Tiago]):
             action_topic=arm_topics[self.gripper],
             message_type=ParallelGripperCommand,
             target_position=target_position,
->>>>>>> 955027106 (Refactor Tiago and Tracy gripper motion mappings)
         )
-
