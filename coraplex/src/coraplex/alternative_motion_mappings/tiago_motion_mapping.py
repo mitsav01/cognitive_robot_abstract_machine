@@ -2,6 +2,8 @@ from semantic_digital_twin.datastructures.definitions import GripperState
 from giskardpy.motion_statechart.ros2_nodes.ros_tasks import RobotiqGripperActionServerTask
 from giskardpy.motion_statechart.goals.templates import Parallel
 from control_msgs.action import ParallelGripperCommand
+from coraplex.robot_plans.motions.base import AlternativeMotion
+from semantic_digital_twin.robots.tiago import Tiago
 from coraplex.datastructures.enums import ExecutionType, Arms
 from coraplex.view_manager import ViewManager
 from coraplex.robot_plans import (
@@ -10,6 +12,8 @@ from coraplex.robot_plans import (
     LookingMotion,
     MoveGripperMotion,
 )
+from dataclasses import dataclass
+import logging
 
 logger = logging.getLogger(__name__)
 
@@ -63,4 +67,3 @@ class TiagoGripperMotion(MoveGripperMotion, AlternativeMotion[Tiago]):
             message_type=ParallelGripperCommand,
             target_position=target_position,
         )
-

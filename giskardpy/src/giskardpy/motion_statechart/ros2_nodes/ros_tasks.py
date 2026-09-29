@@ -18,7 +18,7 @@ except ModuleNotFoundError:
 from rclpy.action import ActionClient
 from std_msgs.msg import Header
 from typing_extensions import Type, TypeVar, Generic
-
+from control_msgs.action import ParallelGripperCommand
 import krrood.symbolic_math.symbolic_math as sm
 from giskardpy.motion_statechart.context import MotionStatechartContext
 from giskardpy.motion_statechart.data_types import ObservationStateValues
@@ -226,8 +226,8 @@ class RobotiqGripperActionServerTask(
     Desired gripper opening in meters.
 
     Examples:
-        0.0   -> Fully closed
-        0.7 -> Fully open
+        0.0  -> Fully closed
+        0.7  -> Fully open
     """
 
     target_velocity: float = 10.0
@@ -243,9 +243,7 @@ class RobotiqGripperActionServerTask(
     def build_msg(self, context: MotionStatechartContext):
         """
         Builds the ParallelGripperCommand goal message.
-
         """
-
         self._msg = ParallelGripperCommand.Goal()
 
         self._msg.command.position = [float(self.target_position)]
@@ -264,3 +262,11 @@ class RobotiqGripperActionServerTask(
             f"Stalled: {self._result.result.stalled}"
         )
 
+    def on_tick(self, context: MotionStatechartContext) -> ObservationStateValues:
+        if self._result and self._result.result:
+            return (
+                ObservationStateValues.TRUE
+                if (self._result.result.reached_goal or self._result.result.stalled)
+                else ObservationStateValues.FALSE
+            )
+        return ObservationStateValues.UNKNOWN
