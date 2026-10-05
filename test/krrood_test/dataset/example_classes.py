@@ -2,40 +2,51 @@ from __future__ import annotations
 
 import importlib
 import uuid
+from abc import ABC
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum, auto, StrEnum
-
+from enum import Enum, auto
 from pathlib import Path
-from types import FunctionType
-from typing import Set, Generic
+from types import FunctionType, NoneType
+from typing import Set, Generic, TypeVar as TypingTypeVar
 
 from sqlalchemy import types, TypeDecorator
-from typing_extensions import Dict, Any, Sequence, Self, Annotated
+from typing_extensions import Dict, Any, Sequence, Self
 from typing_extensions import List, Optional, Type
 
 from krrood.adapters.json_serializer import SubclassJSONSerializer, to_json, from_json
-from krrood.entity_query_language.core.base_expressions import SymbolicExpression
-from krrood.entity_query_language.core.mapped_variable import MappedVariable
+from krrood.class_diagrams.mocking import MockedClass
 from krrood.entity_query_language.factories import (
-    set_of,
-    a,
     variable,
     count,
-    the,
     entity,
     count_range,
 )
-from krrood.entity_query_language.predicate import symbolic_function
 from krrood.ormatic.data_access_objects.alternative_mappings import (
     AlternativeMapping,
     T,
 )
-from krrood.parametrization.feature_extraction.aggregations import (
-    AggregationStatistic,
-    aggregation_statistic,
-)
+from krrood.patterns.subclass_safe_generic import SubClassSafeGeneric
 from krrood.symbol_graph.symbol_graph import Symbol
+from krrood import logger
+
+try:
+    from random_events.interval import Bound, SimpleInterval
+    from krrood.parametrization.feature_extraction.aggregations import (
+        AggregationStatistic,
+        aggregation_statistic,
+    )
+except ImportError as e:
+    # Was added to allow this to work on Windows which random_events does not support.
+    logger.debug(f"Could not import random_events: {e}")
+
+    class AggregationStatistic(MockedClass, Generic[T]): ...
+
+    aggregation_statistic = lambda *args: lambda *args2: args2
+    Bound = NoneType
+    SimpleInterval = NoneType
+
+
 from ..dataset.semantic_world_like_classes import Body, Cabinet
 
 
@@ -51,6 +62,11 @@ class Element(Enum):
 @dataclass
 class KRROODPositionTypeWrapper(Symbol):
     position_type: Type[KRROODPosition]
+
+
+@dataclass
+class KRROODBarePositionTypeWrapper(Symbol):
+    position_type: type
 
 
 # check that flat classes work
@@ -72,6 +88,16 @@ class KRROODOrientation(Symbol):
     y: float
     z: float
     w: Optional[float]
+
+
+# check that the PEP 604 spelling of an optional is recognised just like Optional[...]
+@dataclass
+class KRROODPipeOptionalOrientation(Symbol):
+    x: float
+    y: float
+    z: float
+    w: float | None
+    position: KRROODPosition | None
 
 
 # check that one to one relationship work
@@ -196,6 +222,7 @@ class KRROODTorso(KRROODKinematicChain):
     """
     A collection of kinematic chains that are connected to the torso.
     """
+
 
 @dataclass
 class Parent(Symbol):
@@ -345,7 +372,6 @@ class Rotation(Symbol):
 
 @dataclass(eq=False)
 class RotationMapped(AlternativeMapping[Rotation]):
-
     angle: float
 
     @classmethod
@@ -616,6 +642,67 @@ class JSONWrapper:
     more_objects: List[JSONSerializableClass] = field(default_factory=list)
 
 
+JSONSerializableAnswer = TypingTypeVar("JSONSerializableAnswer")
+"""
+What a :class:`GenericJSONSerializableClass` answers with.
+"""
+
+
+@dataclass
+class GenericJSONSerializableClass(
+    SubclassJSONSerializer, Generic[JSONSerializableAnswer], SubClassSafeGeneric, ABC
+):
+    """
+    A JSON-serializable base that is used as a field type without binding its parameter,
+    so the field says only that some subclass of it is stored.
+    """
+
+    label: str = ""
+    """
+    What this value stands for.
+    """
+
+    def to_json(self) -> Dict[str, Any]:
+        return {**super().to_json(), "label": to_json(self.label)}
+
+    @classmethod
+    def _from_json(cls, data: Dict[str, Any], **kwargs) -> Self:
+        return cls(label=from_json(data["label"]))
+
+
+@dataclass
+class TextJSONSerializableClass(GenericJSONSerializableClass[str]): ...
+
+
+@dataclass
+class GenericJSONWrapper:
+    """
+    Holds the generic JSON value under a field that leaves the parameter free.
+    """
+
+    json_serializable_object: GenericJSONSerializableClass
+    """
+    The value, whose own JSON names which subclass it is.
+    """
+
+
+@dataclass
+class HolderOfSimpleInterval:
+    """
+    Its sole field's type, :class:`random_events.interval.SimpleInterval`, lives in a
+    package nothing else in this module references, which is exactly what is needed to
+    reproduce a bug where ``WrappedTable.create_custom_type`` mapped a
+    ``SubclassJSONSerializer`` field to JSON without importing that field type's own
+    module, tripping a ``MappedAnnotationError`` at class-definition time.
+    """
+
+    bounds: SimpleInterval = field(
+        default_factory=lambda: SimpleInterval.from_data(
+            0.0, 1.0, Bound.CLOSED, Bound.CLOSED
+        )
+    )
+
+
 # %% Multiple inheritance and MRO tests
 
 
@@ -745,6 +832,22 @@ class GenericClassAssociation:
     )
 
 
+# %% Test TypeVar field resolution in DAO generation
+# Reproduces the issue where fields typed with a TypeVar (like
+# TKinematicStructureEntity in HasRootKinematicStructureEntity) were silently
+# skipped by WrappedTable.parse_field.
+
+TTestEntity = TypingTypeVar("TTestEntity", bound=KRROODPosition)
+
+
+@dataclass
+class TypeVarFieldHolder(Symbol):
+    """Domain class with a TypeVar-typed field to test parse_field resolution."""
+
+    typed_field: TTestEntity = field(kw_only=True)
+    name: str = ""
+
+
 @dataclass
 class PathAssociation:
     path: Path
@@ -758,6 +861,24 @@ class SceneObjectType(Enum):
 @dataclass
 class SceneObject:
     type: SceneObjectType
+
+
+@dataclass
+class ApproachSceneObject:
+    """
+    An action standing for one whose argument is a whole entity carrying an enum, so a
+    query over it has to describe that entity's own kind as well as its own fields.
+    """
+
+    target: SceneObject
+    """
+    The object approached, named outright rather than described.
+    """
+
+    speed: float
+    """
+    How fast it is approached, which a query may leave underspecified.
+    """
 
 
 @dataclass
@@ -839,6 +960,118 @@ class TestExPartsAggregations(SceneObjectAggregationBase[TestExParts]):
         """
         [cou] = count(variable(SceneRoom, self.instance.rooms)).tolist()
         return cou
+
+
+# %% Relational causal experiment (skill-confounded grasp attempts)
+
+
+@dataclass
+class GraspAttempt:
+    """
+    A single grasp attempt, whose arm position and outcome may be confounded by
+    the robot's shared skill level.
+    """
+
+    arm: float
+    """
+    The arm's position at the time of this attempt.
+    """
+
+    grasped: bool
+    """
+    Whether this attempt succeeded.
+    """
+
+
+@dataclass
+class PickingRobot:
+    """
+    A robot performing a series of grasp attempts, with a skill level shared
+    across every attempt it makes.
+    """
+
+    skill: float
+    """
+    The robot's skill level, generated independently of any single attempt.
+    """
+
+    attempts: List[GraspAttempt]
+    """
+    The robot's grasp attempts.
+    """
+
+
+@dataclass
+class PickingRobotAggregations(AggregationStatistic[PickingRobot]):
+    """
+    Aggregation statistics for :class:`PickingRobot` over its ``attempts`` field.
+    """
+
+    @aggregation_statistic("attempts")
+    def success_count(self) -> int:
+        """
+        Count of successful grasp attempts.
+        """
+        grasped_var = variable(GraspAttempt, self.instance.attempts).grasped
+        [result] = entity(count_range(grasped_var)).where(grasped_var == True).tolist()
+        return result
+
+    @aggregation_statistic("attempts")
+    def total_count(self) -> int:
+        """
+        Total number of grasp attempts.
+        """
+        [result] = count(variable(GraspAttempt, self.instance.attempts)).tolist()
+        return result
+
+
+class RobotStation(Enum):
+    """
+    Where a picking robot is stationed.
+    """
+
+    LAB = auto()
+    FACTORY = auto()
+
+
+@dataclass
+class StationedPickingRobot:
+    """
+    A picking robot with a class-level enum attribute -- its station -- alongside its
+    exchangeable grasp attempts.
+    """
+
+    station: RobotStation
+    """
+    Where the robot is stationed.
+    """
+
+    skill: float
+    """
+    The robot's skill level.
+    """
+
+    attempts: List[GraspAttempt]
+    """
+    The robot's grasp attempts.
+    """
+
+
+@dataclass
+class StationedPickingRobotAggregations(AggregationStatistic[StationedPickingRobot]):
+    """
+    Aggregation statistics for :class:`StationedPickingRobot` over its ``attempts``
+    field.
+    """
+
+    @aggregation_statistic("attempts")
+    def success_count(self) -> int:
+        """
+        Count of successful grasp attempts.
+        """
+        grasped_var = variable(GraspAttempt, self.instance.attempts).grasped
+        [result] = entity(count_range(grasped_var)).where(grasped_var == True).tolist()
+        return result
 
 
 @dataclass

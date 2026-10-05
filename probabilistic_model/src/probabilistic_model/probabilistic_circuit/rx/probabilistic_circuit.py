@@ -56,10 +56,10 @@ def invalidates_topology_cache(method):
 
     After the wrapped method has run, the circuit's cached root and layers are
     invalidated so that they are recomputed on the next access. Use this only for
-    methods whose effect on the topology is unconditional and complete by the time
-    they return; methods that invalidate conditionally (e.g. only when a new edge is
-    actually created) or that need a valid cache part-way through their own body
-    invalidate the cache explicitly instead.
+    methods whose effect on the topology is unconditional and complete by the time they
+    return; methods that invalidate conditionally (e.g. only when a new edge is actually
+    created) or that need a valid cache part-way through their own body invalidate the
+    cache explicitly instead.
 
     :param method: The method to wrap.
     :return: The wrapped method.
@@ -84,20 +84,20 @@ class Unit(SubclassJSONSerializer, ABC):
     """
     Class for all units of a probabilistic circuit.
 
-    This class should not be used by users directly.
-    Use :class:`ProbabilisticCircuit` as interface to users.
+    This class should not be used by users directly. Use :class:`ProbabilisticCircuit`
+    as interface to users.
     """
 
     probabilistic_circuit: Optional[ProbabilisticCircuit] = field(
         kw_only=True, repr=False, default=None
     )
     """
-    The circuit this component is part of. 
+    The circuit this component is part of.
     """
 
     result_of_current_query: Any = field(init=False, default=None, repr=False)
     """
-    The result of the current query. 
+    The result of the current query.
     """
 
     index: Optional[int] = field(kw_only=True, default=None, repr=False)
@@ -158,7 +158,8 @@ class Unit(SubclassJSONSerializer, ABC):
         """
         Update the variables of this unit and its descendants.
 
-        :param new_variables: A map that maps the variables that should be replaced to their new variable.
+        :param new_variables: A map that maps the variables that should be replaced to
+            their new variable.
         """
         for leaf in self.leaves:
             for variable in leaf.variables:
@@ -215,17 +216,21 @@ class Unit(SubclassJSONSerializer, ABC):
 
     def empty_copy(self) -> Self:
         """
-        Creat a copy of this circuit without any subcircuits. Only the parameters should be copied.
-        This is used whenever a new circuit has to be created during inference.
+        Creat a copy of this circuit without any subcircuits.
 
-        :return: A copy of this circuit without any subcircuits that is not in this units graph.
+        Only the parameters should be copied. This is used whenever a new circuit has to
+        be created during inference.
+
+        :return: A copy of this circuit without any subcircuits that is not in this
+            units graph.
         """
         return self.__class__()
 
     def simplify(self):
         """
-        Simplify the circuit by removing nodes and redirected edges that have no impact in-place.
-        Essentially, this method transforms the circuit into an alternating order of sum and product units.
+        Simplify the circuit by removing nodes and redirected edges that have no impact
+        in-place. Essentially, this method transforms the circuit into an alternating
+        order of sum and product units.
 
         :return: The simplified circuit.
         """
@@ -236,8 +241,9 @@ class Unit(SubclassJSONSerializer, ABC):
         Draw samples from the circuit.
 
         For sampling, a node gets requested a number of samples from all his parents.
-        The parents write into the `result_of_current_query` attribute a tuple describing the beginning index of the
-        sampling and how many samples are requested.
+        The parents write into the `result_of_current_query` attribute a tuple
+        describing the beginning index of the sampling and how many samples are
+        requested.
         """
         raise NotImplementedError
 
@@ -280,7 +286,7 @@ class LeafUnit(Unit):
 
     @property
     def leaves(self) -> List[LeafUnit]:
-        return []
+        return [self]
 
     def log_likelihood(self, events: npt.NDArray):
         self.result_of_current_query = self.distribution.log_likelihood(events)
@@ -325,12 +331,13 @@ class LeafUnit(Unit):
         Sample from the distribution and write the samples into the samples array.
 
         During sampling each node accumulates, in ``result_of_current_query``, the
-        indices of the rows in ``samples`` that are routed to it (as a list of
-        index arrays, one per parent contribution). This leaf draws all of its
-        samples in a single batched call instead of once per request.
+        indices of the rows in ``samples`` that are routed to it (as a list of index
+        arrays, one per parent contribution). This leaf draws all of its samples in a
+        single batched call instead of once per request.
 
         :param samples: The array to write the samples into.
-        :param variable_to_index_map: The map from variables to column indices in the samples array.
+        :param variable_to_index_map: The map from variables to column indices in the
+            samples array.
         """
         # a subcircuit legitimately receives no rows when an ancestor mixture
         # assigns it zero samples; there is then nothing for this leaf to draw
@@ -338,7 +345,7 @@ class LeafUnit(Unit):
             return
         rows = np.concatenate(self.result_of_current_query)
         column_indices = [
-            variable_to_index_map[variable] for variable in self.variables
+            variable_to_index_map[variable] for variable in self.distribution.variables
         ]
         samples[rows[:, None], column_indices] = self.distribution.sample(len(rows))
 
@@ -375,11 +382,51 @@ class LeafUnit(Unit):
     def copy_without_graph(self):
         return self.__class__(distribution=self.distribution.__deepcopy__())
 
+    def replace_by_mixture(
+        self, truncations: Iterable[Tuple[Optional[ProbabilisticModel], float]]
+    ) -> Optional[SumUnit]:
+        """
+        Replace this leaf by the mixture of the given truncations of its distribution,
+        each weighted by its probability.
+
+        :param truncations: Each truncated distribution with its log-probability.
+        :return: The sum unit that replaced this leaf, or nothing if every truncation is
+            impossible, in which case this leaf is left without a distribution.
+        """
+        result = SumUnit(probabilistic_circuit=self.probabilistic_circuit)
+        total_probability = 0.0
+
+        for truncated, log_probability in truncations:
+            probability = np.exp(log_probability)
+            if probability == 0:
+                continue
+            result.add_subcircuit(
+                self.__class__(
+                    distribution=truncated,
+                    probabilistic_circuit=self.probabilistic_circuit,
+                ),
+                log_probability,
+            )
+            total_probability += probability
+
+        if total_probability == 0:
+            self.result_of_current_query = -np.inf
+            self.distribution = None
+            self.probabilistic_circuit.remove_node(result)
+            return None
+
+        self.connect_incoming_edges_to(result)
+        self.probabilistic_circuit.remove_node(self)
+
+        result.normalize()
+        result.result_of_current_query = np.log(total_probability)
+        return result
+
 
 @dataclass(eq=False)
 class InnerUnit(Unit, ABC):
     """
-    Class for inner units
+    Class for inner units.
     """
 
     @property
@@ -425,6 +472,7 @@ class SumUnit(InnerUnit):
     _latent_variable: Optional[Symbolic] = None
     """
     The latent variable of this unit.
+
     This has to be here due to the rvalue/lvalue problem in random events.
 
     TODO remove this when RE is fixed
@@ -473,19 +521,19 @@ class SumUnit(InnerUnit):
         return result
 
     def forward(self, *args, **kwargs):
-        self.result_of_current_query = np.sum(
-            [
-                np.exp(weight) * subcircuit.result_of_current_query
-                for weight, subcircuit in self.log_weighted_subcircuits
-            ],
-            axis=0,
-        )
+        # streamed instead of building the full subcircuit-results list at once
+        result = 0.0
+        for weight, subcircuit in self.log_weighted_subcircuits:
+            result = result + np.exp(weight) * subcircuit.result_of_current_query
+        self.result_of_current_query = result
 
     def log_forward(self, *args, **kwargs):
-        result = [
-            lw + s.result_of_current_query for lw, s in self.log_weighted_subcircuits
-        ]
-        self.result_of_current_query = logsumexp(result, axis=0)
+        # streamed via logaddexp instead of building the full list for logsumexp
+        result = None
+        for log_weight, subcircuit in self.log_weighted_subcircuits:
+            value = log_weight + subcircuit.result_of_current_query
+            result = value if result is None else np.logaddexp(result, value)
+        self.result_of_current_query = result
 
     moment = forward
 
@@ -520,8 +568,8 @@ class SumUnit(InnerUnit):
         Every row routed to a mixture is assigned to exactly one subcircuit, drawn
         according to the subcircuit weights. The rows are partitioned in a single
         multinomial draw rather than once per parent request, which keeps the work
-        proportional to the number of samples instead of the number of paths through
-        the circuit.
+        proportional to the number of samples instead of the number of paths through the
+        circuit.
         """
         # a subcircuit legitimately receives no rows when an ancestor mixture
         # assigns it zero samples; there is then nothing to route onward
@@ -552,7 +600,7 @@ class SumUnit(InnerUnit):
     def mount_with_interaction_terms(
         self, other: Self, interaction_model: ProbabilisticModel
     ):
-        """
+        r"""
         Create a distribution that factorizes as follows:
 
         .. math::
@@ -700,8 +748,12 @@ class SumUnit(InnerUnit):
                     # add an edge to that subcircuit
                     self.add_subcircuit(sub_subcircuit, new_weight)
 
-                # remove the old node
-                self.probabilistic_circuit.remove_node(subcircuit)
+                if self.probabilistic_circuit.graph.has_edge(
+                    self.index, subcircuit.index
+                ):
+                    self.probabilistic_circuit.remove_edge(self, subcircuit)
+                if not self.probabilistic_circuit.in_edges(subcircuit):
+                    self.probabilistic_circuit.remove_node(subcircuit)
 
     def normalize(self):
         """
@@ -717,8 +769,8 @@ class SumUnit(InnerUnit):
         """
         Return True iff this SumUnit's log-weights sum to log(1) == 0.
 
-        Uses logsumexp for numerical stability, matching normalize().
-        An empty SumUnit (no subcircuits) is considered normalized.
+        Uses logsumexp for numerical stability, matching normalize(). An empty SumUnit
+        (no subcircuits) is considered normalized.
 
         :param tolerance: Maximum absolute deviation from 0.0 permitted.
         :returns: True if the weights are normalised within tolerance.
@@ -773,7 +825,7 @@ class SumUnit(InnerUnit):
 @dataclass(eq=False)
 class ProductUnit(InnerUnit):
     """
-    Decomposable Product Units for Probabilistic Circuits
+    Decomposable Product Units for Probabilistic Circuits.
     """
 
     representation = "×"
@@ -849,17 +901,24 @@ class ProductUnit(InnerUnit):
                 # type hinting
                 subcircuit: Self
 
-                # mount the children of that circuit directly
+                # mount the children of that circuit directly onto this one
                 for sub_subcircuit in subcircuit.subcircuits:
-                    subcircuit.add_subcircuit(sub_subcircuit)
+                    self.add_subcircuit(sub_subcircuit)
+
+                if self.probabilistic_circuit.graph.has_edge(
+                    self.index, subcircuit.index
+                ):
+                    self.probabilistic_circuit.remove_edge(self, subcircuit)
+                if not self.probabilistic_circuit.in_edges(subcircuit):
+                    self.probabilistic_circuit.remove_node(subcircuit)
 
     def sample(self, *args, **kwargs):
         """
         Route the sample rows accumulated from this unit's parents to its subcircuits.
 
-        A decomposable product factorizes over disjoint variables, so every sample
-        row is forwarded unchanged to each subcircuit; the subcircuits then fill in
-        their respective columns of the same rows.
+        A decomposable product factorizes over disjoint variables, so every sample row
+        is forwarded unchanged to each subcircuit; the subcircuits then fill in their
+        respective columns of the same rows.
         """
         # a subcircuit legitimately receives no rows when an ancestor mixture
         # assigns it zero samples; there is then nothing to route onward
@@ -876,15 +935,15 @@ class ProductUnit(InnerUnit):
         target_circuit: ProbabilisticCircuit,
     ) -> None:
         """
-        Attach the root of marginal_circuit as a child of this ProductUnit,
-        constructing fresh nodes owned by target_circuit.
+        Attach the root of marginal_circuit as a child of this ProductUnit, constructing
+        fresh nodes owned by target_circuit.
 
-        marginal() and log_truncated_in_place() return flat circuits
-        (SumUnit -> leaves, or a single leaf), so one level of recursion
-        suffices to copy all nodes into target_circuit.
+        marginal() and log_truncated_in_place() return flat circuits (SumUnit -> leaves,
+        or a single leaf), so one level of recursion suffices to copy all nodes into
+        target_circuit.
 
-        :param marginal_circuit: The marginal or truncated circuit whose root
-            to attach as a child of this ProductUnit.
+        :param marginal_circuit: The marginal or truncated circuit whose root to attach
+            as a child of this ProductUnit.
         :param target_circuit: The owning circuit for all newly created nodes.
         """
         root = marginal_circuit.root
@@ -905,9 +964,9 @@ class ProbabilisticCircuit(ProbabilisticModel, SubclassJSONSerializer):
     """
     Probabilistic Circuits as a directed, rooted, acyclic graph.
 
-    The nodes of the graph are the units of the circuit.
-    The edges of the graph indicate how the units are connected.
-    The outgoing edges of a sum unit contain the log-log_weights of the subcircuits.
+    The nodes of the graph are the units of the circuit. The edges of the graph indicate
+    how the units are connected. The outgoing edges of a sum unit contain the log-
+    log_weights of the subcircuits.
     """
 
     graph: rx.PyDAG[Unit] = field(default_factory=lambda: rx.PyDAG(multigraph=False))
@@ -919,25 +978,29 @@ class ProbabilisticCircuit(ProbabilisticModel, SubclassJSONSerializer):
         init=False, default=None, repr=False, compare=False
     )
     """
-    Cached root unit. Invalidated whenever the topology of the graph changes.
+    Cached root unit.
+
+    Invalidated whenever the topology of the graph changes.
     """
 
     _layers_cache: Optional[List[List[Unit]]] = field(
         init=False, default=None, repr=False, compare=False
     )
     """
-    Cached layers of the graph. Invalidated whenever the topology of the graph changes.
+    Cached layers of the graph.
+
+    Invalidated whenever the topology of the graph changes.
     """
 
     def _invalidate_topology_cache(self):
         """
         Invalidate the cached root and layers.
 
-        This must be called whenever nodes or edges are added to or removed from
-        the graph. Pure edge-weight updates (which do not change the topology) do
-        not require invalidation. The :func:`invalidates_topology_cache` decorator
-        calls this automatically after a mutator; call it directly only from
-        mutators whose invalidation is conditional (:meth:`add_node`, :meth:`add_edge`).
+        This must be called whenever nodes or edges are added to or removed from the
+        graph. Pure edge-weight updates (which do not change the topology) do not
+        require invalidation. The :func:`invalidates_topology_cache` decorator calls
+        this automatically after a mutator; call it directly only from mutators whose
+        invalidation is conditional (:meth:`add_node`, :meth:`add_edge`).
         """
         self._root_cache = None
         self._layers_cache = None
@@ -1075,7 +1138,8 @@ class ProbabilisticCircuit(ProbabilisticModel, SubclassJSONSerializer):
         Add nodes and edges from a subgraph to this circuit.
 
         :param subgraph: The subgraph to add nodes from.
-        :return: A dictionary mapping the node indices in the subgraph to the new units in this circuit.
+        :return: A dictionary mapping the node indices in the subgraph to the new units
+            in this circuit.
         """
         new_nodes = {node.index: node.copy_without_graph() for node in subgraph.nodes()}
         self.add_nodes_from(new_nodes.values())
@@ -1118,6 +1182,7 @@ class ProbabilisticCircuit(ProbabilisticModel, SubclassJSONSerializer):
     def root(self) -> Unit:
         """
         The root of the circuit is the node with in-degree 0.
+
         This is the output node, that will perform the final computation.
 
         :return: The root of the circuit.
@@ -1154,7 +1219,7 @@ class ProbabilisticCircuit(ProbabilisticModel, SubclassJSONSerializer):
                             :,
                             [
                                 variable_to_index_map[variable]
-                                for variable in unit.variables
+                                for variable in unit.distribution.variables
                             ],
                         ]
                     )
@@ -1174,7 +1239,7 @@ class ProbabilisticCircuit(ProbabilisticModel, SubclassJSONSerializer):
                             :,
                             [
                                 variable_to_index_map[variable]
-                                for variable in unit.variables
+                                for variable in unit.distribution.variables
                             ],
                         ]
                     )
@@ -1216,7 +1281,8 @@ class ProbabilisticCircuit(ProbabilisticModel, SubclassJSONSerializer):
         Construct the truncated circuit from a simple event.
 
         :param simple_event: The simple event to condition on.
-        :param singleton_allowed: Whether to allow singletons in the simple sets of the event.
+        :param singleton_allowed: Whether to allow singletons in the simple sets of the
+            event.
         :return: The truncated circuit and the log-probability of the event
         """
         for layer in reversed(self.layers):
@@ -1256,14 +1322,14 @@ class ProbabilisticCircuit(ProbabilisticModel, SubclassJSONSerializer):
         """
         Truncate the circuit to an Event in place.
 
-        A composite event is handled by truncating a deep copy of the circuit to each
-        of its (disjoint) simple sets and combining the results into a normalized
-        mixture.
+        A composite event is handled by truncating a deep copy of the circuit to each of
+        its (disjoint) simple sets and combining the results into a normalized mixture.
 
         :param event: The event to condition on.
-        :param singleton_allowed: Whether to allow singletons in the simple sets of the event.
-        :return: The truncated circuit and the log-probability of the event, or
-            ``(None, -inf)`` if the event has zero probability.
+        :param singleton_allowed: Whether to allow singletons in the simple sets of the
+            event.
+        :return: The truncated circuit and the log-probability of the event, or ``(None,
+            -inf)`` if the event has zero probability.
         """
         # skip trivial case
         if event.is_empty():
@@ -1324,23 +1390,47 @@ class ProbabilisticCircuit(ProbabilisticModel, SubclassJSONSerializer):
         return result.log_truncated_in_place(event, singleton_allowed)
 
     def marginal_in_place(self, variables: Iterable[Variable]) -> Optional[Self]:
+        result = self.restrict_to_variables_in_place(variables)
+        if result is None:
+            return None
+        self.simplify()
+        return self
+
+    def restrict_to_variables_in_place(
+        self, variables: Iterable[Variable]
+    ) -> Optional[Self]:
+        """
+        Restrict the circuit to variables in place, without ``simplify()``'s same-type
+        merge.
+
+        :meth:`marginal_in_place` is this plus a trailing ``simplify()`` call: that call
+        flattens nested SumUnits into their parent, which leaves the represented
+        distribution unchanged but can erase branch boundaries a caller relies on -- for
+        instance ``CausalCircuit.verify_support_determinism`` inspecting whether a
+        support-deterministic circuit's own branches stay disjoint.
+
+        :param variables: The variables to keep.
+        :return:``self``, or ``None`` if none of ``variables`` are modeled.
+        """
         result = [
             node.marginal(variables)
             for layer in reversed(self.layers)
             for node in layer
         ][-1]
-        if result is not None:
-            self.remove_unreachable_nodes(result)
-            self.simplify()
-            return self
-        else:
+        if result is None:
             return None
+        self.remove_unreachable_nodes(result)
+        return self
 
-    def log_conditional_in_place(
-        self, point: Dict[Variable, Any]
-    ) -> Tuple[Optional[Self], float]:
+    def _condition_leaves_in_place(self, point: Dict[Variable, Any]) -> Optional[Unit]:
+        """
+        Push ``point`` into every leaf and sum unit's own forward pass, in place, and
+        drop whatever that leaves with zero probability. Every unit that survives stays
+        exactly where it was: this alone neither marginalizes, merges nor moves a unit.
 
-        # do forward pass
+        :param point: The value to condition each of the given variables on.
+        :return: The surviving root, or ``None`` if ``point`` has no probability.
+        """
         for layer in reversed(self.layers):
             for unit in layer:
                 if unit.is_leaf:
@@ -1353,7 +1443,6 @@ class ProbabilisticCircuit(ProbabilisticModel, SubclassJSONSerializer):
                 else:
                     raise NotImplementedError()
 
-        # clean the circuit up
         root = self.root
         [
             self.graph.remove_node(node.index)
@@ -1364,9 +1453,35 @@ class ProbabilisticCircuit(ProbabilisticModel, SubclassJSONSerializer):
         self._invalidate_topology_cache()
 
         if root not in self.graph.nodes():
-            return None, -np.inf
+            return None
 
         self.remove_unreachable_nodes(root)
+        return root
+
+    def log_conditional_in_place(
+        self, point: Dict[Variable, Any], preserve_structure: bool = False
+    ) -> Tuple[Optional[Self], float]:
+        """
+        Condition the circuit on a point, in place.
+
+        :param point: The value to condition each of the given variables on.
+        :param preserve_structure: Skip the rebuild below, which marginalizes the
+            conditioned variables out and simplifies -- like :meth:`marginal_in_place`,
+            unlike :meth:`restrict_to_variables_in_place`, flattening nested sums and
+            erasing which branch a unit belonged to. Keeps that structure, at the cost
+            of leaving the conditioned variables' point leaves in place.
+        :return: The conditioned circuit, or ``None`` if the point has no probability,
+            and the point's log-likelihood.
+        """
+        root = self._condition_leaves_in_place(point)
+        if root is None:
+            return None, -np.inf
+        # read before marginalizing, which may simplify the root away
+        log_probability = root.result_of_current_query
+
+        if preserve_structure:
+            self.normalize()
+            return self, log_probability
 
         # simplify dirac parts
         remaining_variables = [v for v in self.variables if v not in point]
@@ -1385,12 +1500,12 @@ class ProbabilisticCircuit(ProbabilisticModel, SubclassJSONSerializer):
         for variable, value in point.items():
             new_root.add_subcircuit(leaf(make_dirac(variable, value), self))
 
-        new_root.result_of_current_query = root.result_of_current_query
+        new_root.result_of_current_query = log_probability
 
         self.simplify()
         self.normalize()
 
-        return self, root.result_of_current_query
+        return self, log_probability
 
     def log_conditional(
         self, point: Dict[Variable, Any]
@@ -1399,8 +1514,22 @@ class ProbabilisticCircuit(ProbabilisticModel, SubclassJSONSerializer):
         return result.log_conditional_in_place(point)
 
     def marginal(self, variables: Iterable[Variable]) -> Optional[Self]:
+        result = self.restrict_to_variables(variables)
+        if result is None:
+            return None
+        result.simplify()
+        return result
+
+    def restrict_to_variables(self, variables: Iterable[Variable]) -> Optional[Self]:
+        """
+        Restrict a copy of the circuit to variables, without ``simplify()``'s same-type
+        merge. See :meth:`restrict_to_variables_in_place`.
+
+        :param variables: The variables to keep.
+        :return: The restricted copy, or ``None`` if none of ``variables`` are modeled.
+        """
         result = self.__deepcopy__()
-        return result.marginal_in_place(variables)
+        return result.restrict_to_variables_in_place(variables)
 
     def sample(self, amount: int) -> npt.NDArray:
         # initialize all results
@@ -1474,10 +1603,12 @@ class ProbabilisticCircuit(ProbabilisticModel, SubclassJSONSerializer):
     def empty_copy(self) -> Self:
         """
         Create a copy of this circuit without any nodes.
-        Only the parameters should be copied.
-        This is used whenever a new circuit has to be created during inference.
 
-        :return: A copy of this circuit without any subcircuits that is not in this units graph.
+        Only the parameters should be copied. This is used whenever a new circuit has to
+        be created during inference.
+
+        :return: A copy of this circuit without any subcircuits that is not in this
+            units graph.
         """
         return self.__class__()
 
@@ -1485,7 +1616,8 @@ class ProbabilisticCircuit(ProbabilisticModel, SubclassJSONSerializer):
         """
         Deep copy of the circuit.
 
-        :param memo: A dictionary that is used to keep track of objects that have already been copied.
+        :param memo: A dictionary that is used to keep track of objects that have
+            already been copied.
         :return: A deep copy of the circuit.
         """
         if memo is None:
@@ -1563,11 +1695,31 @@ class ProbabilisticCircuit(ProbabilisticModel, SubclassJSONSerializer):
         """
         self.root.update_variables(new_variables)
 
+    def rename_variables_with_prefix(
+        self, prefix: str, excluded_variables: Iterable[Variable] = ()
+    ) -> None:
+        """
+        Rename each variable in this circuit to include ``prefix`` as a namespace.
+
+        Produces names of the form ``"{prefix}.{variable.name}"``. Variables in
+        ``excluded_variables`` are left unchanged.
+
+        :param prefix: String prefix to prepend to every variable name.
+        :param excluded_variables: Variables that should keep their current names.
+        """
+        variable_renames = {
+            variable: type(variable)(
+                f"{prefix}.{variable.name}", domain=variable.domain
+            )
+            for variable in self.variables
+            if variable not in excluded_variables
+        }
+        self.update_variables(variable_renames)
+
     def is_deterministic(self) -> bool:
         """
         :return: Whether, this circuit is deterministic or not.
         """
-
         # calculate the support
         support = self.support
 
@@ -1674,15 +1826,15 @@ class ProbabilisticCircuit(ProbabilisticModel, SubclassJSONSerializer):
         """
         Plot the structure of the circuit using matplotlib.
 
-        :param node_colors: Optionally specified colors of the node.
-        If nodes are not specified in the dictionary, they will be black.
+        :param node_colors: Optionally specified colors of the node. If nodes are not
+            specified in the dictionary, they will be black.
         :param node_size: The size of the nodes
         :param variable_name_offset: The offset to the right of the variable names.
         :param plot_inference: If the results of the inference should be plotted.
-        :param inference_representation: The representation of the inference results as a function from node to string.
+        :param inference_representation: The representation of the inference results as
+            a function from node to string.
         :param inference_result_offset: The vertical offset of the inference results.
         """
-
         # fill the colors for the nodes
         node_colors = self.fill_node_colors(node_colors)
         scale = 1.0
@@ -1747,7 +1899,8 @@ class ProbabilisticCircuit(ProbabilisticModel, SubclassJSONSerializer):
 
     def replace_discrete_distribution_with_deterministic_sum(self):
         """
-        splits the distribution into sum unit with all the discrete possibilities as leaf.
+        Splits the distribution into sum unit with all the discrete possibilities as
+        leaf.
         """
         old_leafs = self.leaves
         for leaf in old_leafs:
@@ -1780,11 +1933,14 @@ class ProbabilisticCircuit(ProbabilisticModel, SubclassJSONSerializer):
 
     def mount(self, other: Unit) -> Dict[int, Unit]:
         """
-        Mount another unit including its descendants. There will be no edge from `self` to `other`.
-        This will also remove the nodes in other and their descendants from their circuit.
+        Mount another unit including its descendants.
+
+        There will be no edge from `self` to `other`. This will also remove the nodes in
+        other and their descendants from their circuit.
 
         :param other: The other unit to mount.
-        :returns: A mapping from the indices of the nodes in `other` to the nodes in `self` that were added.
+        :returns: A mapping from the indices of the nodes in `other` to the nodes in
+            `self` that were added.
         """
         if other.probabilistic_circuit is not None:
             descendants = other.probabilistic_circuit.descendants(other)
@@ -1805,7 +1961,8 @@ class ProbabilisticCircuit(ProbabilisticModel, SubclassJSONSerializer):
 
 class ShallowProbabilisticCircuit(ProbabilisticCircuit):
     """
-    class for PC in shallow form, sum unit as root followed by product units which only have leafs as children.
+    Class for PC in shallow form, sum unit as root followed by product units which only
+    have leafs as children.
     """
 
     @classmethod
@@ -1824,9 +1981,10 @@ class ShallowProbabilisticCircuit(ProbabilisticCircuit):
     def shallowing(self, node: Unit, presucc: Unit | None):
         """
         This function transforms the PC into it shallow form, in place.
-        This function uses recursion and need to be called on the root of the PC.
-        :node: the Node in focus to be shallowed
-        :presucc: the predecessor of the node of before shallowing.
+
+        This function uses recursion and need to be called on the root of the PC. :node:
+        the Node in focus to be shallowed :presucc: the predecessor of the node of
+        before shallowing.
         """
         probabilistic_circuit = node.probabilistic_circuit
         succ_list: List = list(probabilistic_circuit.successors(node))
@@ -1914,9 +2072,10 @@ class ShallowProbabilisticCircuit(ProbabilisticCircuit):
     ):
         """
         Construct E_p of a product unit in a shallow context.
-        :own_pro_unit: product unit which is part of E_p
-        :other: other product unit which is part of E_p
-        :tolerance: float as how close to zero is zero, because of imprecision.
+
+        :own_pro_unit: product unit which is part of E_p :other: other product unit
+        which is part of E_p :tolerance: float as how close to zero is zero, because of
+        imprecision.
         """
         # supp_own = own_pro_unit.support
         # supp_other = other_pro_unit.support
@@ -1946,8 +2105,9 @@ class ShallowProbabilisticCircuit(ProbabilisticCircuit):
     def events_of_higher_density_sum(self, other: Self, tolerance: float = 10e-8):
         """
         Construct E_p of a sum unit in a shallow context.
-        :other: the other Root shallow PC node to create the E_p
-        :tolerance: float as how close to zero is zero, because of imprecisions
+
+        :other: the other Root shallow PC node to create the E_p :tolerance: float as
+        how close to zero is zero, because of imprecisions
         """
         progress_bar = tqdm.tqdm(
             total=len(self.root.subcircuits) * len(other.root.subcircuits)
@@ -1965,6 +2125,7 @@ class ShallowProbabilisticCircuit(ProbabilisticCircuit):
     def l1(self, other: Self, tolerance: float = 10e-8) -> float:
         """
         The L1 metric between shallow Circuits are calculated.
+
         It is important, that before the shallowing the PC replace_discrete_distribution_with_deterministic_sum called on.´
         :other: the other shallow PC which the L1 metric is calculated
         :tolerance: float as how close to zero is zero, because of imprecision for the Creation of E_p.
@@ -1978,6 +2139,7 @@ class ShallowProbabilisticCircuit(ProbabilisticCircuit):
     def remove_node_and_successor_structure(self, node: Unit):
         """
         This is an assist function for pruning disconnected subgraphs from the PC.
+
         :node: the node that needs to be checked if to be pruned and its children.
         """
         probabilistic_circuit = node.probabilistic_circuit
@@ -2013,11 +2175,11 @@ class UnivariateContinuousLeaf(UnivariateLeaf):
         self, event: Interval, singleton_allowed: bool = False
     ):
         """
-        Condition this distribution on a simple event in-place but use sum units to create conditions on composite
-        intervals.
+        Condition this distribution on a simple event in-place but use sum units to
+        create conditions on composite intervals.
+
         :param event: The simple event to condition on.
         """
-
         # if it is a simple truncation
         if len(event.simple_sets) == 1:
             self.distribution, self.result_of_current_query = (
@@ -2027,46 +2189,12 @@ class UnivariateContinuousLeaf(UnivariateLeaf):
             )
             return self
 
-        total_probability = 0.0
-
-        # calculate the truncated distribution as sum unit
-        result = SumUnit(probabilistic_circuit=self.probabilistic_circuit)
-
-        for simple_interval in event.simple_sets:
-            current_conditional, current_log_probability = (
-                self.distribution.log_conditional_from_simple_interval(
-                    simple_interval, singleton_allowed
-                )
+        return self.replace_by_mixture(
+            self.distribution.log_conditional_from_simple_interval(
+                simple_interval, singleton_allowed
             )
-            current_probability = np.exp(current_log_probability)
-
-            if current_probability == 0:
-                continue
-
-            current_conditional = self.__class__(
-                distribution=current_conditional,
-                probabilistic_circuit=self.probabilistic_circuit,
-            )
-            result.add_subcircuit(current_conditional, np.log(current_probability))
-            total_probability += current_probability
-
-        # if the event is impossible
-        if total_probability == 0:
-            self.result_of_current_query = -np.inf
-            self.distribution = None
-            self.probabilistic_circuit.remove_node(result)
-            return None
-
-        # reroute the parent to the new sum unit
-        self.connect_incoming_edges_to(result)
-
-        # remove this node
-        self.probabilistic_circuit.remove_node(self)
-
-        # update result
-        result.normalize()
-        result.result_of_current_query = np.log(total_probability)
-        return result
+            for simple_interval in event.simple_sets
+        )
 
 
 @dataclass
@@ -2077,9 +2205,9 @@ class UnivariateDiscreteLeaf(UnivariateLeaf):
 
     def as_deterministic_sum(self) -> SumUnit:
         """
-        Convert this distribution to a deterministic sum unit that encodes the same distribution in-place.
-        The result has as many children as the probability dictionary of this distribution.
-        Each child encodes the value of the variable.
+        Convert this distribution to a deterministic sum unit that encodes the same
+        distribution in-place. The result has as many children as the probability
+        dictionary of this distribution. Each child encodes the value of the variable.
 
         :return: The deterministic sum unit that encodes the same distribution.
         """
@@ -2133,15 +2261,108 @@ class UnivariateDiscreteLeaf(UnivariateLeaf):
         return cls(distribution)
 
 
+@dataclass(eq=False)
+class MultivariateLeaf(LeafUnit):
+    """
+    A leaf whose distribution is over several variables at once.
+
+    Whatever the distribution cannot represent itself, the circuit represents around
+    it: conditioning on all of its variables leaves a product of Dirac leaves, and an
+    event of several boxes becomes a mixture of one truncation per box.
+    """
+
+    def log_conditional_in_place(self, point: Dict[Variable, Any]):
+        own_point = self.filter_variable_map_by_self(point)
+        if not own_point:
+            self.result_of_current_query = 0.0
+            return
+        if len(own_point) == len(self.distribution.variables):
+            self.replace_by_dirac_product(own_point)
+            return
+        self.distribution, self.result_of_current_query = (
+            self.distribution.log_conditional(own_point)
+        )
+
+    def moment(self, order, center, variable_to_index_map):
+        result = np.zeros(len(variable_to_index_map))
+        requested = [
+            variable for variable in self.distribution.variables if variable in order
+        ]
+        if requested:
+            moment = self.distribution.moment(
+                {variable: order[variable] for variable in requested},
+                {variable: center[variable] for variable in requested},
+            )
+            for variable in requested:
+                result[variable_to_index_map[variable]] = moment[variable]
+        self.result_of_current_query = result
+
+    def replace_by_dirac_product(self, point: Dict[Variable, Any]) -> ProductUnit:
+        """
+        Replace this leaf by the product of one Dirac leaf per variable.
+
+        :param point: The value of every variable of this leaf.
+        :return: The product unit that replaced this leaf, carrying the log-density of
+            the point under the distribution.
+        """
+        result = ProductUnit(probabilistic_circuit=self.probabilistic_circuit)
+        for variable in self.distribution.variables:
+            result.add_subcircuit(
+                leaf(make_dirac(variable, point[variable]), self.probabilistic_circuit)
+            )
+        result.result_of_current_query = self.distribution.log_likelihood(
+            np.array([[point[variable] for variable in self.distribution.variables]])
+        )[0]
+
+        self.connect_incoming_edges_to(result)
+        self.probabilistic_circuit.remove_node(self)
+        return result
+
+    def log_truncated_of_simple_event_in_place(
+        self, event: SimpleEvent, singleton_allowed: bool = False
+    ):
+        """
+        Truncate the distribution to every box the event makes of this leaf's variables,
+        and mix the truncations when there is more than one.
+
+        :param event: The simple event to truncate to.
+        :param singleton_allowed: Whether singletons are allowed in the event.
+        """
+        variables = self.distribution.variables
+        boxes = [
+            SimpleEvent.from_data(
+                {
+                    variable: simple_interval.as_composite_set()
+                    for variable, simple_interval in zip(variables, simple_intervals)
+                }
+            ).as_composite_set()
+            for simple_intervals in itertools.product(
+                *(event[variable].simple_sets for variable in variables)
+            )
+        ]
+        if len(boxes) == 1:
+            self.distribution, self.result_of_current_query = (
+                self.distribution.log_truncated(boxes[0], singleton_allowed)
+            )
+            return self
+        return self.replace_by_mixture(
+            self.distribution.log_truncated(box, singleton_allowed) for box in boxes
+        )
+
+
 def leaf(
-    distribution: UnivariateDistribution,
+    distribution: ProbabilisticModel,
     probabilistic_circuit: Optional[ProbabilisticCircuit] = None,
-) -> UnivariateLeaf:
+) -> LeafUnit:
     """
     Factory that creates the correct leaf from a distribution.
 
     :return: The leaf.
     """
+    if not isinstance(distribution, UnivariateDistribution):
+        return MultivariateLeaf(
+            distribution, probabilistic_circuit=probabilistic_circuit
+        )
     if isinstance(distribution.variable, Continuous):
         return UnivariateContinuousLeaf(
             distribution, probabilistic_circuit=probabilistic_circuit

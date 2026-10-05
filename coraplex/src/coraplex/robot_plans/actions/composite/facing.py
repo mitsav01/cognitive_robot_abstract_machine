@@ -6,8 +6,8 @@ from datetime import timedelta
 import numpy as np
 from typing_extensions import Optional, Any
 
-from coraplex.config.action_conf import ActionConfig
 from coraplex.plans.factories import sequential
+from coraplex.plans.plan_node import PlanNode
 from coraplex.robot_plans.actions.base import ActionDescription
 from coraplex.robot_plans.actions.core.navigation import NavigateAction, LookAtAction
 from semantic_digital_twin.spatial_types import (
@@ -19,19 +19,17 @@ from semantic_digital_twin.spatial_types.spatial_types import Pose
 @dataclass
 class FaceAtAction(ActionDescription):
     """
-    Turn the robot chassis such that is faces the ``pose`` and after that perform a look at action.
+    Turn the robot chassis such that is faces the ``pose`` and after that perform a look
+    at action.
     """
 
     pose: Pose
     """
     The pose to face 
     """
-    keep_joint_states: bool = ActionConfig.face_at_keep_joint_states
-    """
-    Keep the joint states of the robot the same during the navigation.
-    """
 
-    def execute(self) -> None:
+    @property
+    def _action_plan(self) -> PlanNode:
         # get the robot position
         robot_position = self.robot.root.global_transform
 
@@ -51,19 +49,9 @@ class FaceAtAction(ActionDescription):
             reference_frame=self.world.root,
         )
 
-        self.add_subplan(
-            sequential(
-                [
-                    NavigateAction(
-                        new_robot_pose, self.keep_joint_states
-                    ),  # turn robot
-                    LookAtAction(self.pose),  # look at the target
-                ]
-            )
-        ).perform()
-
-    def validate(
-        self, result: Optional[Any] = None, max_wait_time: Optional[timedelta] = None
-    ):
-        # The validation will be done in the LookAtActionPerformable.perform() method so no need to validate here.
-        pass
+        return sequential(
+            [
+                NavigateAction(new_robot_pose),  # turn robot
+                LookAtAction(self.pose),  # look at the target
+            ]
+        )

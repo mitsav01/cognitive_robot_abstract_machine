@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import os
-from abc import ABC
 from collections import defaultdict
 from dataclasses import dataclass, field
+from enum import StrEnum
 from importlib.resources import files
 from pathlib import Path
-from typing import Self, Union, List
 
+from typing_extensions import Self, List
+
+from krrood.ormatic.utils import classproperty
 from semantic_digital_twin.collision_checking.collision_rules import (
     AvoidExternalCollisions,
     SelfCollisionMatrixRule,
@@ -17,6 +19,7 @@ from semantic_digital_twin.datastructures.definitions import (
     StaticJointState,
     TorsoState,
 )
+from semantic_digital_twin.datastructures.field_of_view import FieldOfView
 from semantic_digital_twin.datastructures.joint_state import JointState
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.robots.robot_part_mixins import (
@@ -25,8 +28,6 @@ from semantic_digital_twin.robots.robot_part_mixins import (
     HasTorso,
     HasMobileBase,
     HasTwoFingers,
-    HasEndEffector,
-    HasSensors,
 )
 from semantic_digital_twin.robots.robot_parts import (
     AbstractRobot,
@@ -38,11 +39,41 @@ from semantic_digital_twin.robots.robot_parts import (
     MobileBase,
     EndEffector,
 )
-from semantic_digital_twin.datastructures.field_of_view import FieldOfView
 from semantic_digital_twin.spatial_types import Quaternion, Vector3
+from semantic_digital_twin.world_description.connections import DifferentialDrive
 from semantic_digital_twin.world_description.world_entity import (
     KinematicStructureEntity,
 )
+
+
+class StretchJoint(StrEnum):
+    """
+    Names of the Stretch's commandable connections, as spelled in its URDF.
+
+    Members are usable wherever a connection name is expected, so a configuration keyed by
+    them stays a plain mapping of names to positions.
+
+    ..note:: The two drive wheels are members because the standalone interface registers
+        them alongside the arm and head joints.
+    """
+
+    LIFT = "joint_lift"
+    ARM_L0 = "joint_arm_l0"
+    ARM_L1 = "joint_arm_l1"
+    ARM_L2 = "joint_arm_l2"
+    ARM_L3 = "joint_arm_l3"
+    WRIST_YAW = "joint_wrist_yaw"
+    WRIST_PITCH = "joint_wrist_pitch"
+    WRIST_ROLL = "joint_wrist_roll"
+
+    GRIPPER_LEFT_FINGER = "joint_gripper_finger_left"
+    GRIPPER_RIGHT_FINGER = "joint_gripper_finger_right"
+
+    HEAD_PAN = "joint_head_pan"
+    HEAD_TILT = "joint_head_tilt"
+
+    LEFT_WHEEL = "joint_left_wheel"
+    RIGHT_WHEEL = "joint_right_wheel"
 
 
 @dataclass(eq=False)
@@ -108,7 +139,7 @@ class StretchGripper(EndEffector, HasTwoFingers[StretchLeftFinger, StretchRightF
 
         gripper_close = JointState.from_mapping(
             name=PrefixedName("gripper_close", prefix=self.name.name),
-            mapping=dict(zip(gripper_joints, [0.0, 0.0])),
+            mapping=dict(zip(gripper_joints, [-0.067, -0.067])),
             state_type=GripperState.CLOSE,
         )
 
@@ -138,7 +169,13 @@ class StretchArm(Arm[StretchGripper]):
     def setup_joint_states(self) -> List[JointState]:
         arm_park = JointState.from_mapping(
             name=PrefixedName("arm_park", prefix=self.name.name),
-            mapping={self._world.get_connection_by_name("joint_lift"): 0.5},
+            mapping={
+                self._world.get_connection_by_name(StretchJoint.LIFT): 0.65,
+                self._world.get_connection_by_name(StretchJoint.ARM_L3): 0.0,
+                self._world.get_connection_by_name(StretchJoint.ARM_L2): 0.0,
+                self._world.get_connection_by_name(StretchJoint.ARM_L1): 0.0,
+                self._world.get_connection_by_name(StretchJoint.ARM_L0): 0.0,
+            },
             state_type=StaticJointState.PARK,
         )
 
@@ -149,7 +186,7 @@ class StretchArm(Arm[StretchGripper]):
         cls, robot_root: KinematicStructureEntity
     ) -> Self:
         return cls(
-            root=robot_root._world.get_body_in_branch_by_name(robot_root, "link_mast"),
+            root=robot_root._world.get_body_in_branch_by_name(robot_root, "link_lift"),
             tip=robot_root._world.get_body_in_branch_by_name(
                 robot_root, "link_wrist_roll"
             ),
@@ -320,10 +357,13 @@ class StretchTorso(Torso, HasNeck[StretchNeck], HasOneArm[StretchArm]):
 
 
 @dataclass(eq=False)
-class StretchMobileBase(MobileBase, HasTorso[StretchTorso]):
+class StretchMobileBase(MobileBase[DifferentialDrive], HasTorso[StretchTorso]):
 
     full_body_controlled: bool = field(default=True, kw_only=True)
-    forward_axis: Vector3 = field(default_factory=Vector3.NEGATIVE_Y)
+
+    @classproperty
+    def forward_axis(cls) -> Vector3:
+        return Vector3.NEGATIVE_Y()
 
     def setup_hardware_interfaces(self):
         pass
@@ -343,7 +383,9 @@ class StretchMobileBase(MobileBase, HasTorso[StretchTorso]):
 @dataclass(eq=False)
 class Stretch(AbstractRobot, HasMobileBase[StretchMobileBase]):
     """
-    The Stretch 2 robot by Hello Robot. https://teal-blue-zpt3.squarespace.com/stretch-2
+    The Stretch 2 robot by Hello Robot.
+
+    https://teal-blue-zpt3.squarespace.com/stretch-2
     """
 
     @classmethod
@@ -371,5 +413,14 @@ class Stretch(AbstractRobot, HasMobileBase[StretchMobileBase]):
         )
 
     def _setup_velocity_limits(self):
-        vel_limits = defaultdict(lambda: 1.0)
+        vel_limits = defaultdict(lambda: 0.1)
+        vel_limits[
+            self._world.get_connection_by_name(StretchJoint.GRIPPER_LEFT_FINGER)
+        ] = 0.0067
+        vel_limits[
+            self._world.get_connection_by_name(StretchJoint.GRIPPER_RIGHT_FINGER)
+        ] = 0.0067
+        vel_limits[self._world.get_connection_by_name(StretchJoint.WRIST_YAW)] = 0.4
+        vel_limits[self._world.get_connection_by_name(StretchJoint.HEAD_TILT)] = 0.5
+        vel_limits[self._world.get_connection_by_name(StretchJoint.HEAD_PAN)] = 0.5
         self.tighten_dof_velocity_limits_of_1dof_connections(new_limits=vel_limits)

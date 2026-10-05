@@ -19,6 +19,7 @@ from semantic_digital_twin.spatial_types import (
 from semantic_digital_twin.spatial_types.spatial_types import (
     Quaternion,
     Pose,
+    Point2,
     Pose2D,
     SpatialType,
 )
@@ -250,13 +251,18 @@ class PoseMapping(AlternativeMapping[Pose]):
         """
         Creates a Pose instance from a Point3Mapping and a QuaternionMapping.
 
-        This method constructs a Pose object by utilizing the provided Point3Mapping for the position and the
-        QuaternionMapping for the orientation. The resulting Pose is associated with the specified reference frame.
+        This method constructs a Pose object by utilizing the provided Point3Mapping for
+        the position and the QuaternionMapping for the orientation. The resulting Pose
+        is associated with the specified reference frame.
 
-        :param position: A Point3Mapping object that provides the position data for the Pose.
-        :param orientation: A QuaternionMapping object that provides the orientation data for the Pose.
-        :param reference_frame: The reference frame to which the Pose will be associated.
-        :return: A Pose instance created from the given Point3Mapping and QuaternionMapping.
+        :param position: A Point3Mapping object that provides the position data for the
+            Pose.
+        :param orientation: A QuaternionMapping object that provides the orientation
+            data for the Pose.
+        :param reference_frame: The reference frame to which the Pose will be
+            associated.
+        :return: A Pose instance created from the given Point3Mapping and
+            QuaternionMapping.
         """
         return Pose(
             position=position.to_domain_object(),
@@ -270,33 +276,53 @@ class PoseMapping(AlternativeMapping[Pose]):
 
 
 @dataclass(eq=False)
-class Pose2DMapping(AlternativeMapping[Pose2D]):
+class Point2Mapping(AlternativeMapping[Point2]):
     x: float
     y: float
-    yaw: float
+
+    reference_frame: Optional[KinematicStructureEntity]
+
+    @classmethod
+    def from_domain_object(cls, obj: Point2):
+        result = cls(
+            x=float(obj.x), y=float(obj.y), reference_frame=obj.reference_frame
+        )
+        return result
+
+    def to_domain_object(self) -> Point2:
+        return Point2(x=self.x, y=self.y, reference_frame=self.reference_frame)
+
+
+@dataclass(eq=False)
+class Pose2DMapping(AlternativeMapping[Pose2D]):
+    position: Point2
+    bearing: float
     reference_frame: Optional[KinematicStructureEntity] = field(
         default=None, kw_only=True
     )
 
     @classmethod
     def from_domain_object(cls, obj: Pose2D):
-        result = cls(x=float(obj.x), y=float(obj.y), yaw=float(obj.yaw))
+        result = cls(position=obj.position, bearing=float(obj.yaw))
         result.reference_frame = obj.reference_frame
         return result
 
     def to_domain_object(self) -> Pose2D:
-        return Pose2D(
-            x=self.x,
-            y=self.y,
-            yaw=self.yaw,
+        return Pose2D.from_position_and_yaw(
+            self.position,
+            yaw=self.bearing,
             reference_frame=self.reference_frame,
         )
+
+    @classmethod
+    def required_pre_build_classes(cls) -> List[Type]:
+        return [Point2]
 
 
 class TrimeshType(TypeDecorator):
     """
-    Type that casts fields that are of type `type` to their class name on serialization and converts the name
-    to the class itself through the globals on load.
+    Type that casts fields that are of type `type` to their class name on serialization
+    and converts the name to the class itself through the globals on load.
     """
 
     impl = types.LargeBinary(4 * 1024 * 1024 * 1024 - 1)  # 4 GB max

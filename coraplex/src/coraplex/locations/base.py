@@ -3,23 +3,49 @@ from __future__ import annotations
 import logging
 from abc import abstractmethod
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import cast
 
-from typing_extensions import List, Iterator, Optional, Iterable
+from typing_extensions import (
+    Callable,
+    List,
+    Iterator,
+    Optional,
+    Iterable,
+    Type,
+    TYPE_CHECKING,
+)
 
-from krrood.entity_query_language.predicate import Predicate
 from coraplex.datastructures.dataclasses import Context
+from krrood.entity_query_language.predicate import Predicate
+from krrood.entity_query_language.verbalization.vocabulary.parts_of_speech import (
+    Adjective,
+    clause,
+    Copula,
+    Noun,
+)
+
+if TYPE_CHECKING:
+    from coraplex.alternative_motion_mapping import AlternativeMotion
+
 try:
-    from semantic_digital_twin.adapters.ros.visualization.viz_marker import VizMarkerPublisher
+    from semantic_digital_twin.adapters.ros.visualization.viz_marker import (
+        VizMarkerPublisher,
+    )
 except ImportError:
     VizMarkerPublisher = None
+from semantic_digital_twin.collision_checking.collision_matrix import CollisionRule
 from semantic_digital_twin.collision_checking.collision_rules import (
     AvoidExternalCollisions,
+    AllowCollisionBetweenGroups,
     AllowSelfCollisions,
 )
+from semantic_digital_twin.robots.robot_part_mixins import HasMobileBase
 from semantic_digital_twin.robots.robot_parts import AbstractRobot
+from semantic_digital_twin.semantic_annotations.semantic_annotations import Floor
 from semantic_digital_twin.spatial_types.spatial_types import Pose
 from semantic_digital_twin.world import World
+from semantic_digital_twin.world_description.world_entity import Body
 
 logger = logging.getLogger("coraplex")
 
@@ -32,7 +58,8 @@ class Location(Iterable[Pose]):
 
     context: Optional[Context]
     """
-    The context where the location can extract information about the robot and world from.
+    The context where the location can extract information about the robot and world
+    from.
     """
 
     target_pose: Pose
@@ -44,9 +71,16 @@ class Location(Iterable[Pose]):
     """
     Backend that generates pose candidates.
     """
+
     validators: List[PoseValidator]
     """
     Validators that are used to check if a generated pose is valid.
+    """
+
+    standing_violated_distance: float = 0.05
+    """
+    How close in meters the robot may come to its surroundings at a candidate pose
+    before that pose counts as in collision.
     """
 
     @property
@@ -63,33 +97,95 @@ class Location(Iterable[Pose]):
         """
         return next(iter(self))
 
+    def _floor_contact(
+        self, robot: AbstractRobot, floors: List[Body]
+    ) -> AllowCollisionBetweenGroups:
+        """
+        :param robot: The robot standing at a candidate pose.
+        :param floors: The bodies of the floors of the robot's world.
+        :return: The rule under which the robot resting on a floor is not a collision.
+        """
+        return AllowCollisionBetweenGroups(
+            body_group_a=robot.bodies_with_collision,
+            body_group_b=floors,
+        )
+
+    def _standing_clearance(
+        self, robot: AbstractRobot, floors: List[Body]
+    ) -> List[CollisionRule]:
+        """
+        :param robot: The robot standing at a candidate pose.
+        :param floors: The bodies of the floors of the robot's world.
+        :return: The rules a candidate is judged in collision under.
+
+        A standing pose only has to be clear of the surroundings; the arms are wherever
+        the previous motion left them, so the robot touching itself says nothing about
+        the pose, and neither does it resting on the floor it drives on.
+        """
+        return [
+            AvoidExternalCollisions(
+                robot=robot,
+                violated_distance=self.standing_violated_distance,
+            ),
+            AllowSelfCollisions(robot=robot),
+            self._floor_contact(robot, floors),
+        ]
+
     def __iter__(self) -> Iterator[Pose]:
         test_world = deepcopy(self.world)
-        test_robot = test_world.get_semantic_annotations_by_type(type(self.robot))[0]
+        test_robot = cast(
+            AbstractRobot, test_world.get_semantic_annotation_by_id(self.robot.id)
+        )
         for validator in self.validators:
-            validator.world = test_world
-            validator.robot = test_robot
+            validator.context = Context(
+                world=test_world,
+                robot=test_robot,
+                alternative_motion_mappings=self.context.alternative_motion_mappings,
+                motion_tolerances=self.context.motion_tolerances,
+                ticks_per_motion=self.context.ticks_per_motion,
+            )
 
         if self.context.debug:
             VizMarkerPublisher(
                 _world=test_world, node=self.context.ros_node
-            ).with_tf_publisher()
+            ).with_collision_visualization()
+
+        floor_bodies = [
+            floor.root for floor in test_world.get_semantic_annotations_by_type(Floor)
+        ]
+
+        # Save to current rules to restore them later
+        rules_of_the_run = list(test_world.collision_manager.temporary_rules)
 
         for pose_candidate in self.generator:
 
-            test_robot.root.parent_connection.origin = pose_candidate
-
-            test_world.collision_manager.clear_temporary_rules()
-            test_world.collision_manager.add_temporary_rule(
-                AvoidExternalCollisions(robot=test_robot)
+            # A candidate says where to stand and which way to look, which is the
+            # heading NavigateAction is handed. Turning it into a base pose the same way
+            # is what makes the checks below see the configuration the robot ends up in
+            # rather than one rotated by whatever its forward axis is.
+            test_robot.set_root_pose(
+                test_robot.mobile_base.pose_facing(pose_candidate)
+                if isinstance(test_robot, HasMobileBase)
+                else pose_candidate
             )
-            test_world.collision_manager.add_temporary_rule(
-                AllowSelfCollisions(robot=test_robot)
-            )
-            test_world.collision_manager.update_collision_matrix()
-            collisions = test_world.collision_manager.compute_collisions()
 
-            if collisions.contacts:
+            collision_manager = test_world.collision_manager
+            collision_manager.clear_temporary_rules()
+            collision_manager.extend_temporary_rule(
+                self._standing_clearance(test_robot, floor_bodies)
+            )
+            collision_manager.update_collision_matrix()
+
+            stands_in_collision = test_robot.is_in_collision
+
+            collision_manager.clear_temporary_rules()
+            collision_manager.extend_temporary_rule(rules_of_the_run)
+            collision_manager.extend_temporary_rule(
+                [self._floor_contact(test_robot, floor_bodies)]
+            )
+            collision_manager.update_collision_matrix()
+
+            if stands_in_collision:
                 logger.debug(f"Candidate pose in collision, skipping")
                 continue
 
@@ -101,10 +197,12 @@ class Location(Iterable[Pose]):
 
     def merge(self, other: Location) -> Location:
         """
-        Merge this location with another location, merging the generator backends and validators.
+        Merge this location with another location, merging the generator backends and
+        validators.
 
         :param other: The other location to merge with.
-        :return: A new location that is the merge of this location and the other location.
+        :return: A new location that is the merge of this location and the other
+            location.
         """
         return Location(
             self.context,
@@ -118,9 +216,34 @@ class Location(Iterable[Pose]):
 
 
 @dataclass
+class DeferredLocation(Iterable[Pose]):
+    """
+    Lazily rebuilds a concrete :class:`Location` from current world state on each
+    iteration, so its pose generator and validators reflect the world at the moment the
+    location is consumed (execution time) rather than when the plan was constructed.
+
+    .. warning::
+        :meth:`__iter__` must stay a generator (``yield from``). Returning
+        ``iter(self.location_factory())`` would invoke the factory eagerly, because EQL's
+        ``variable`` wraps the domain in :func:`filter`, which calls :func:`iter` on its
+        argument at plan-construction time. A generator defers the factory call to the
+        first ``next``, which only happens once the underspecified action is grounded.
+    """
+
+    location_factory: Callable[[], Location]
+    """
+    Builds a fresh :class:`Location` from the current world state.
+    """
+
+    def __iter__(self) -> Iterator[Pose]:
+        yield from self.location_factory()
+
+
+@dataclass
 class PoseGeneratorBackend:
     """
-    Generator backend base class for poses, generates pose candidates which are checked against a set of validators.
+    Generator backend base class for poses, generates pose candidates which are checked
+    against a set of validators.
     """
 
     @abstractmethod
@@ -129,11 +252,14 @@ class PoseGeneratorBackend:
 
     def merge(self, other: PoseGeneratorBackend) -> PoseGeneratorBackend:
         """
-        Merge this pose generator backend with another pose generator backend. The resulting pose generator backend
-        generates pose candidates that are generated by both pose generator backends.
+        Merge this pose generator backend with another pose generator backend.
+
+        The resulting pose generator backend generates pose candidates that are
+        generated by both pose generator backends.
 
         :param other: The other pose generator backend to merge with.
-        :return: A new pose generator backend that is the merge of this pose generator backend and the other pose generator backend.
+        :return: A new pose generator backend that is the merge of this pose generator
+            backend and the other pose generator backend.
         """
         pass
 
@@ -147,16 +273,34 @@ class PoseValidator(Predicate):
     Validates a pose candidate.
     """
 
-    world: World
+    context: Context = field(default=None, kw_only=True)
     """
-    The world in which the pose candidate should be validated.
-    """
-
-    robot: AbstractRobot
-    """
-    The robot that should be used to validate the pose candidate.
+    Context that holds the important information about the robot and world.
     """
 
     @abstractmethod
     def __call__(self, *args, **kwargs) -> bool:
         pass
+
+    @classmethod
+    def _verbalization_fragment_(cls, fields):
+        """
+        Default clause for a pose validator — *"a pose candidate is valid"*.
+
+        A validator is a validity *check*, agnostic of who performs it, so it says the
+        candidate is valid rather than naming an agent. Concrete validators (visibility
+        / reachability) may override this with their own surface.
+        """
+        return clause(Noun("pose candidate"), Copula(), Adjective("valid"))
+
+    @property
+    def world(self) -> World:
+        return self.context.world
+
+    @property
+    def robot(self) -> AbstractRobot:
+        return self.context.robot
+
+    @property
+    def alternative_motion_mappings(self) -> List[Type[AlternativeMotion]]:
+        return self.context.alternative_motion_mappings

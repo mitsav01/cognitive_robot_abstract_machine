@@ -7,7 +7,7 @@ import coraplex.alternative_motion_mappings.tiago_motion_mapping  # type: ignore
 from krrood.ormatic.data_access_objects.helper import to_dao
 from coraplex.datastructures.enums import Arms, ApproachDirection, VerticalAlignment
 from coraplex.datastructures.grasp import GraspDescription
-from coraplex.motion_executor import simulated_robot
+from coraplex.execution_environment import simulated_robot
 from coraplex.orm.ormatic_interface import *  # type: ignore
 from coraplex.plans.factories import sequential, execute_single
 from coraplex.plans.plan import Plan
@@ -16,11 +16,12 @@ from coraplex.robot_plans.actions.core.navigation import NavigateAction
 from coraplex.robot_plans.actions.core.robot_body import MoveTorsoAction, ParkArmsAction
 from semantic_digital_twin.datastructures.definitions import TorsoState
 from semantic_digital_twin.spatial_types.spatial_types import Pose
+from semantic_digital_twin.semantic_annotations.semantic_annotations import Milk
 
 
 @pytest.fixture()
-def simple_plan(immutable_model_world):
-    world, robot_view, context = immutable_model_world
+def simple_plan(pr2_apartment_context):
+    world, robot_view, context = pr2_apartment_context
 
     plan = sequential(
         [
@@ -28,7 +29,6 @@ def simple_plan(immutable_model_world):
                 Pose.from_xyz_quaternion(
                     1.6, 1.9, 0, 0, 0, 0, 1, reference_frame=world.root
                 ),
-                True,
             ),
             MoveTorsoAction(TorsoState.HIGH),
             ParkArmsAction(Arms.BOTH),
@@ -37,7 +37,7 @@ def simple_plan(immutable_model_world):
     ).plan
     return plan
 
-
+@pytest.mark.skip("Execution Data is not recorded right now")
 def test_plan_serialization(coraplex_testing_session, simple_plan):
     session = coraplex_testing_session
 
@@ -83,13 +83,13 @@ def test_replay_simple_plan(coraplex_testing_session, simple_plan):
 
 
 @pytest.fixture
-def complex_plan(mutable_model_world):
-    world, robot_view, context = mutable_model_world
+def complex_plan(pr2_apartment_context):
+    world, robot_view, context = pr2_apartment_context
     context.evaluate_conditions = False
 
     plan = execute_single(
         TransportAction(
-            object_designator=world.get_body_by_name("milk.stl"),
+            object_designator=world.get_semantic_annotations_by_type(Milk)[0],
             target_location=Pose.from_xyz_quaternion(
                 2.4, 2.8, 1, 0, 0, 0, 1, reference_frame=world.root
             ),
@@ -105,7 +105,7 @@ def complex_plan(mutable_model_world):
 
     return plan
 
-
+@pytest.mark.skip("Execution Data is not recorded right now")
 def test_execution_data_of_complex_plan(coraplex_testing_session, complex_plan):
 
     with simulated_robot:

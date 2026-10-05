@@ -83,22 +83,23 @@ Since a robot is needed we will use the PR2 and use a milk as a target point for
 PR2 will be set to 0.2 since otherwise the arms of the robot will be too low to reach on the countertop.
 
 ```python
-from coraplex.motion_executor import simulated_robot
+from coraplex.execution_environment import simulated_robot
 from coraplex.plans.factories import *
 from coraplex.robot_plans.actions.core.robot_body import ParkArmsAction, MoveTorsoAction
 from coraplex.datastructures.enums import Arms
 from semantic_digital_twin.datastructures.definitions import TorsoState
 
 with simulated_robot:
-    sequential([ ParkArmsAction(Arms.BOTH),
-                   MoveTorsoAction(TorsoState.HIGH)], context=context).perform()
+    sequential([ParkArmsAction(Arms.BOTH),
+                MoveTorsoAction(TorsoState.HIGH)], context=context).perform()
 
 ```
 
 ```python
 from coraplex.robot_plans.actions.core.navigation import NavigateAction
-from coraplex.motion_executor import simulated_robot
+from coraplex.execution_environment import simulated_robot
 from coraplex.locations.factories import reachability_location
+
 location = reachability_location(world.get_body_by_name("milk.stl"), context=context, arm=Arms.LEFT)
 
 plan = execute_single(NavigateAction(next(iter(location))), context=context)
@@ -106,7 +107,7 @@ plan = execute_single(NavigateAction(next(iter(location))), context=context)
 with simulated_robot:
     plan.perform()
 
-pr2_view.root.parent_connection.origin = origin_pose
+pr2_view.root.parent_connection.origin = origin_pose.to_homogeneous_matrix()
 ```
 
 As you can see we get a pose near the countertop where the robot can be placed without colliding with it. Furthermore,
@@ -132,7 +133,7 @@ plan = execute_single(NavigateAction(next(iter(location))), context=context)
 with simulated_robot:
     plan.perform()
 
-pr2_view.root.parent_connection.origin = origin_pose
+pr2_view.root.parent_connection.origin = origin_pose.to_homogeneous_matrix()
 ```
 
 ## Location Designator as Generator
@@ -151,30 +152,4 @@ for i, pose in enumerate(location):
     print(pose)
     if i > 3:
         break
-```
-
-
-## Accessing Locations
-
-Accessing describes a location from which the robot can open a drawer. The drawer is specified by the handle that is 
-used to open it.
-
-At the moment this location designator only works in the apartment environment, so please remove the kitchen if you
-spawned it in a previous example. Furthermore, we need a robot, so we also spawn the PR2 if it isn't spawned already.
-
-```python
-from coraplex.locations.factories import accessing_location
-from semantic_digital_twin.semantic_annotations.semantic_annotations import Drawer, Handle
-
-with world.modify_world():
-    world.add_semantic_annotation_recursively(
-        drawer := Drawer(
-            root=world.get_body_by_name("cabinet10_drawer_middle"),
-            handle=Handle(root=world.get_body_by_name("handle_cab10_m")),
-        )
-    )
-
-location = accessing_location(world.get_semantic_annotations_by_type(Drawer)[0], context=context, arm=Arms.LEFT)
-
-print(next(iter(location)))
 ```

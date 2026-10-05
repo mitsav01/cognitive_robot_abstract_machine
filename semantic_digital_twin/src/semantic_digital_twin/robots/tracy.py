@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import os
-from abc import ABC
 from collections import defaultdict
 from dataclasses import dataclass
+from enum import StrEnum
 from importlib.resources import files
 from pathlib import Path
 from typing import Self, List
+
 
 from semantic_digital_twin.collision_checking.collision_rules import (
     AvoidExternalCollisions,
@@ -21,24 +22,54 @@ from semantic_digital_twin.datastructures.joint_state import JointState
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.robots.robot_part_mixins import (
     HasLeftRightArm,
-    HasTwoFingers,
-    TGenericLeftFinger,
-    TGenericRightFinger,
     HasEndEffector,
+    HasMountingTable,
     HasSensors,
 )
 from semantic_digital_twin.robots.robot_parts import (
     AbstractRobot,
-    Arm,
+    MountingTable,
     Camera,
-    Finger,
     EndEffector,
+    Finger,
 )
+from semantic_digital_twin.robots.robotiq_85_gripper import Robotiq85Gripper
+from semantic_digital_twin.robots.ur10e_arm import UR10eArm
 from semantic_digital_twin.datastructures.field_of_view import FieldOfView
 from semantic_digital_twin.spatial_types import Quaternion, Vector3
 from semantic_digital_twin.world_description.world_entity import (
     KinematicStructureEntity,
 )
+
+
+class TracyJoint(StrEnum):
+    """
+    Names of the Tracy's commandable connections, as spelled in its URDF.
+
+    Members are usable wherever a connection name is expected, so a configuration keyed by
+    them stays a plain mapping of names to positions.
+
+    ..note:: Connections that no controller commands, such as the grippers' inner knuckle
+        and finger tip joints, are left out.
+    """
+
+    LEFT_SHOULDER_PAN = "left_shoulder_pan_joint"
+    LEFT_SHOULDER_LIFT = "left_shoulder_lift_joint"
+    LEFT_ELBOW = "left_elbow_joint"
+    LEFT_WRIST_1 = "left_wrist_1_joint"
+    LEFT_WRIST_2 = "left_wrist_2_joint"
+    LEFT_WRIST_3 = "left_wrist_3_joint"
+    LEFT_GRIPPER_LEFT_KNUCKLE = "left_robotiq_85_left_knuckle_joint"
+    LEFT_GRIPPER_RIGHT_KNUCKLE = "left_robotiq_85_right_knuckle_joint"
+
+    RIGHT_SHOULDER_PAN = "right_shoulder_pan_joint"
+    RIGHT_SHOULDER_LIFT = "right_shoulder_lift_joint"
+    RIGHT_ELBOW = "right_elbow_joint"
+    RIGHT_WRIST_1 = "right_wrist_1_joint"
+    RIGHT_WRIST_2 = "right_wrist_2_joint"
+    RIGHT_WRIST_3 = "right_wrist_3_joint"
+    RIGHT_GRIPPER_LEFT_KNUCKLE = "right_robotiq_85_left_knuckle_joint"
+    RIGHT_GRIPPER_RIGHT_KNUCKLE = "right_robotiq_85_right_knuckle_joint"
 
 
 @dataclass(eq=False)
@@ -135,7 +166,7 @@ class TracyRightGripperRightFinger(Finger):
 
 @dataclass(eq=False)
 class TracyLeftGripper(
-    EndEffector, HasTwoFingers[TracyLeftGripperLeftFinger, TracyLeftGripperRightFinger]
+    Robotiq85Gripper[TracyLeftGripperLeftFinger, TracyLeftGripperRightFinger]
 ):
 
     def setup_hardware_interfaces(self):
@@ -143,8 +174,8 @@ class TracyLeftGripper(
 
     def setup_joint_states(self) -> List[JointState]:
         left_gripper_joints = [
-            self._world.get_connection_by_name("left_robotiq_85_left_knuckle_joint"),
-            self._world.get_connection_by_name("left_robotiq_85_right_knuckle_joint"),
+            self._world.get_connection_by_name(TracyJoint.LEFT_GRIPPER_LEFT_KNUCKLE),
+            self._world.get_connection_by_name(TracyJoint.LEFT_GRIPPER_RIGHT_KNUCKLE),
         ]
 
         gripper_open = JointState.from_mapping(
@@ -185,8 +216,7 @@ class TracyLeftGripper(
 
 @dataclass(eq=False)
 class TracyRightGripper(
-    EndEffector,
-    HasTwoFingers[TracyRightGripperLeftFinger, TracyRightGripperRightFinger],
+    Robotiq85Gripper[TracyRightGripperLeftFinger, TracyRightGripperRightFinger]
 ):
 
     def setup_hardware_interfaces(self):
@@ -194,8 +224,8 @@ class TracyRightGripper(
 
     def setup_joint_states(self) -> List[JointState]:
         right_gripper_joints = [
-            self._world.get_connection_by_name("right_robotiq_85_left_knuckle_joint"),
-            self._world.get_connection_by_name("right_robotiq_85_right_knuckle_joint"),
+            self._world.get_connection_by_name(TracyJoint.RIGHT_GRIPPER_LEFT_KNUCKLE),
+            self._world.get_connection_by_name(TracyJoint.RIGHT_GRIPPER_RIGHT_KNUCKLE),
         ]
 
         gripper_open = JointState.from_mapping(
@@ -228,7 +258,7 @@ class TracyRightGripper(
 
 
 @dataclass(eq=False)
-class TracyLeftArm(Arm[TracyLeftGripper]):
+class TracyLeftArm(UR10eArm[TracyLeftGripper]):
 
     def setup_hardware_interfaces(self):
         self._setup_hardware_interfaces_for_active_connections()
@@ -255,7 +285,7 @@ class TracyLeftArm(Arm[TracyLeftGripper]):
 
 
 @dataclass(eq=False)
-class TracyRightArm(Arm[TracyRightGripper]):
+class TracyRightArm(UR10eArm[TracyRightGripper]):
 
     def setup_hardware_interfaces(self):
         self._setup_hardware_interfaces_for_active_connections()
@@ -307,11 +337,40 @@ class TracyCamera(Camera):
 
 
 @dataclass(eq=False)
+class TracyTable(MountingTable):
+    """
+    The table Tracy's arms are bolted onto.
+    """
+
+    @property
+    def top_z(self) -> float:
+        """
+        Height of the table top above the world root, in metres.
+        """
+        tabletop = max(
+            self.root.collision, key=lambda shape: shape.scale.x * shape.scale.y
+        )
+        root_transform_table = self._world.compute_forward_kinematics_np(
+            self._world.root, self.root
+        )
+        return float(
+            root_transform_table[2, 3]
+            + tabletop.origin.to_np()[2, 3]
+            + tabletop.scale.z / 2
+        )
+
+
+@dataclass(eq=False)
 class Tracy(
-    AbstractRobot, HasLeftRightArm[TracyLeftArm, TracyRightArm], HasSensors[TracyCamera]
+    AbstractRobot,
+    HasLeftRightArm[TracyLeftArm, TracyRightArm],
+    HasSensors[TracyCamera],
+    HasMountingTable[TracyTable],
 ):
     """
-    The dual UR10 arm setup used in the TraceBot project. https://vib.ai.uni-bremen.de/page/comingsoon/the-tracebot-laboratory/
+    The dual UR10 arm setup used in the TraceBot project.
+
+    https://vib.ai.uni-bremen.de/page/comingsoon/the-tracebot-laboratory/
     """
 
     @classmethod
@@ -347,7 +406,33 @@ class Tracy(
         )
 
     def _setup_velocity_limits(self):
-        self.tighten_dof_velocity_limits_proportionally(maximum_velocity=0.2)
+        """
+        Slow the arms down to 0.2 rad/s at their fastest joint, keeping the joints'
+        proportions. The grippers keep the description's own limits: a finger is no
+        danger at that speed, and scaling it down with the arms would leave it too slow
+        to close within a motion.
+        """
+        end_effector_connections = {
+            connection
+            for arm in self.get_arms()
+            for connection in arm.end_effector.active_connections
+        }
+        arm_connections = [
+            connection
+            for connection in self._one_dof_connections
+            if connection not in end_effector_connections
+        ]
+        fastest_arm_velocity = max(
+            connection.raw_dof.limits.upper.velocity for connection in arm_connections
+        )
+        arm_scale = min(1.0, 0.2 / fastest_arm_velocity)
+        self.tighten_dof_velocity_limits_of_1dof_connections(
+            {
+                connection: connection.raw_dof.limits.upper.velocity
+                * (arm_scale if connection in arm_connections else 1.0)
+                for connection in self._one_dof_connections
+            }
+        )
 
     def get_end_effectors(self) -> list[EndEffector]:
         return [self.left_arm.end_effector, self.right_arm.end_effector]

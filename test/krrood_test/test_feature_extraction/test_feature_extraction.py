@@ -2,9 +2,7 @@ import numpy as np
 import pytest
 
 from krrood.entity_query_language.backends import ProbabilisticBackend
-from krrood.entity_query_language.factories import (
-    underspecified,
-)
+from krrood.entity_query_language.factories import a, an
 from krrood.ormatic.data_access_objects.helper import to_dao
 from krrood.parametrization.feature_extraction.feature_extractor import FeatureExtractor
 from krrood.parametrization.model_registries import DictRegistry
@@ -13,9 +11,11 @@ from probabilistic_model.probabilistic_circuit.relational.rspn import (
     RelationalProbabilisticCircuit,
 )
 from probabilistic_model.probabilistic_circuit.rx.helper import fully_factorized
+from random_events.set import Set
 from random_events.variable import Symbolic
 from ..dataset import ormatic_interface  # type: ignore
 from ..dataset.example_classes import (
+    ApproachSceneObject,
     NestedAction,
     KRROODPose,
     KRROODPosition,
@@ -28,6 +28,26 @@ from ..dataset.example_classes import (
     ExampleString,
 )
 from ..dataset.semantic_world_like_classes import Body
+
+
+def test_an_entity_carrying_an_enum_keeps_that_enums_members_as_its_domain():
+    """
+    A polymorphic enum column says only that some enum is stored in it, so the concrete
+    enum has to come from the value standing there; without it the variable describing
+    the entity's kind has no members to be conditioned on.
+    """
+    action = an(ApproachSceneObject)(
+        target=SceneObject(type=SceneObjectType.TABLE), speed=...
+    )
+
+    parameters = UnderspecifiedParameters(action)
+
+    [kind] = [
+        variable
+        for name, variable in parameters.variables.items()
+        if name.endswith(".type")
+    ]
+    assert kind.domain == Set.from_iterable(SceneObjectType)
 
 
 @pytest.fixture
@@ -55,10 +75,10 @@ def scenario():
 
 
 def test_features_extraction():
-    action = underspecified(NestedAction)(
-        pose=underspecified(KRROODPose)(
-            position=underspecified(KRROODPosition)(x=2.0, y=..., z=...),
-            orientation=underspecified(KRROODOrientation)(x=..., y=..., z=..., w=...),
+    action = a(NestedAction)(
+        pose=a(KRROODPose)(
+            position=a(KRROODPosition)(x=2.0, y=..., z=...),
+            orientation=a(KRROODOrientation)(x=..., y=..., z=..., w=...),
         ),
         obj=Body(name="body"),
     )
@@ -90,16 +110,16 @@ def test_features_extraction():
 
 def test_feature_extraction_with_aggregations(scenario):
     room, room2, room_dao, room2_dao, feature_extractor = scenario
-    rpc = RelationalProbabilisticCircuit(SceneRoom)
-    rpc.fit([room_dao, room2_dao])
+    relational_probabilistic_circuit = RelationalProbabilisticCircuit(SceneRoom)
+    relational_probabilistic_circuit.fit([room_dao, room2_dao])
 
-    room_query = underspecified(SceneRoom)(
-        position=underspecified(KRROODPosition)(x=..., y=..., z=...),
-        orientation=underspecified(KRROODOrientation)(x=..., y=..., z=..., w=...),
-        objects=[underspecified(SceneObject)(type=...) for _ in range(4)],
+    room_query = a(SceneRoom)(
+        position=a(KRROODPosition)(x=..., y=..., z=...),
+        orientation=a(KRROODOrientation)(x=..., y=..., z=..., w=...),
+        objects=[a(SceneObject)(type=...) for _ in range(4)],
     )
     room_query.resolve()
-    model = rpc.ground(room_query)
+    model = relational_probabilistic_circuit.ground(room_query)
     model = model.simplify()
 
     assert model.is_valid()
@@ -146,9 +166,9 @@ def test_feature_extractor_on_non_compatible_attribute_types():
 
 
 def test_iterable_literal_with_enum_feature_uses_symbolic_variable():
-    query = underspecified(SceneRoom)(
-        position=underspecified(KRROODPosition)(x=..., y=..., z=...),
-        orientation=underspecified(KRROODOrientation)(x=..., y=..., z=..., w=...),
+    query = a(SceneRoom)(
+        position=a(KRROODPosition)(x=..., y=..., z=...),
+        orientation=a(KRROODOrientation)(x=..., y=..., z=..., w=...),
         objects=[SceneObject(type=SceneObjectType.TABLE)],
     )
     parameters = UnderspecifiedParameters(query)

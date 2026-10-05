@@ -4,13 +4,32 @@ import ast
 import types
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Type, Tuple
+from typing import Any, Type, Tuple, Protocol
 
 from typing_extensions import Optional
 
 
 @dataclass
-class DataclassException(Exception, ABC):
+class CanBehaveLikeDataclassException(Protocol):
+    """
+    A structural template that indicates the matching class is an exception or can be treated as one.
+    """
+
+    @abstractmethod
+    def error_message(self) -> str:
+        """
+        :return: A human-readable description of what went wrong.
+        """
+
+    @abstractmethod
+    def suggest_correction(self) -> str:
+        """
+        :return: Advice on how to fix the error, or an empty string if there is no specific advice.
+        """
+
+
+@dataclass
+class DataclassException(Exception, CanBehaveLikeDataclassException, ABC):
     """
     A base exception class for dataclass-based exceptions.
     Subclasses implement error_message() and suggest_correction(); both are evaluated at
@@ -37,21 +56,9 @@ class DataclassException(Exception, ABC):
         # plain message that __post_init__ baked into the args.
         return Exception.__str__(self)
 
-    @abstractmethod
-    def error_message(self) -> str:
-        """
-        :return: A human-readable description of what went wrong.
-        """
-
-    @abstractmethod
-    def suggest_correction(self) -> str:
-        """
-        :return: Advice on how to fix the error, or an empty string if there is no specific advice.
-        """
-
 
 @dataclass
-class InputError(DataclassException):
+class InputError(DataclassException, ABC):
     """
     Raised when there is an error with user input.
     """
@@ -88,6 +95,33 @@ class MismatchingNumberOfGenericParametersAndResolvedTypes(DataclassException):
 
     def suggest_correction(self) -> str:
         return ""
+
+
+@dataclass
+class UnboundGenericParameter(DataclassException):
+    """
+    Raised when a generic type parameter is read back from a class that binds it to no
+    concrete type.
+    """
+
+    affected_class: Type
+    """
+    The class the parameter was read from.
+    """
+
+    parameter: Any
+    """
+    The type parameter that is left unbound.
+    """
+
+    def error_message(self) -> str:
+        return f"{self.affected_class.__name__} binds {self.parameter} to no concrete type."
+
+    def suggest_correction(self) -> str:
+        return (
+            f"Bind it in a subclass, for example "
+            f"class Concrete({self.affected_class.__name__}[SomeType])."
+        )
 
 
 @dataclass

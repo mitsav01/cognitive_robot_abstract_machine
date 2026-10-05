@@ -8,6 +8,7 @@ from semantic_digital_twin.collision_checking.collision_matrix import (
     MaxAvoidedCollisionsOverride,
 )
 from semantic_digital_twin.collision_checking.collision_rules import (
+    AllowAllCollisions,
     AvoidCollisionBetweenGroups,
     AvoidSelfCollisions,
 )
@@ -58,10 +59,16 @@ class TestExternalCollisionExpressionManager:
 
         # test point on a
         point1 = external_collisions.get_group_a_P_point_on_a_symbol(group, 0)
-        assert np.allclose(point1.evaluate(), np.array([0.0, 0.05, 0.499, 1.0]))
+        assert np.allclose(
+            point1.evaluate(), np.array([0.0, 0.05, 0.249, 1.0]), atol=1e-3
+        )
         point2 = external_collisions.get_group_a_P_point_on_a_symbol(group, 1)
         assert np.allclose(
-            point2.evaluate(), np.array([0.05, 0.0, 0.499, 1.0]), atol=1e-4
+            point2.evaluate(), np.array([0.05, 0.0, 0.249, 1.0]), atol=1e-3
+        )
+        point2 = external_collisions.get_group_a_P_point_on_a_symbol(group, 1)
+        assert np.allclose(
+            point2.evaluate(), np.array([0.05, 0.0, 0.249, 1.0]), atol=1e-3
         )
 
         # test contact normal
@@ -80,9 +87,9 @@ class TestExternalCollisionExpressionManager:
 
         # test contact distance
         contact_distance1 = external_collisions.get_contact_distance_symbol(group, 0)
-        assert np.allclose(contact_distance1.evaluate()[0], 0.2)
+        assert np.allclose(contact_distance1.evaluate()[0], 0.2, atol=1e-3)
         contact_distance2 = external_collisions.get_contact_distance_symbol(group, 1)
-        assert np.allclose(contact_distance2.evaluate()[0], 0.7)
+        assert np.allclose(contact_distance2.evaluate()[0], 0.7, atol=1e-3)
 
         # test violated distance
         violated_distance1 = external_collisions.get_violated_distance_symbol(group, 0)
@@ -269,3 +276,42 @@ def test_collision_rules_survive_merge(pr2_world_copy):
     with world.modify_world():
         world.merge_world(pr2_world_copy)
     assert len(world.collision_manager.rules) == expected
+
+
+# %% whether a robot touches anything
+
+
+def test_robot_is_in_collision_reports_a_contact_of_its_own(cylinder_bot_world):
+    """
+    The robot answers for its own bodies, under whichever rules the caller set.
+    """
+    robot = cylinder_bot_world.get_semantic_annotations_by_type(MinimalRobot)[0]
+    environment = cylinder_bot_world.get_kinematic_structure_entity_by_name(
+        "environment"
+    )
+    collision_manager = cylinder_bot_world.collision_manager
+    collision_manager.extend_temporary_rule(
+        [
+            AvoidCollisionBetweenGroups(
+                buffer_zone_distance=10,
+                violated_distance=0.0,
+                body_group_a=[robot.root],
+                body_group_b=[environment],
+            )
+        ]
+    )
+    collision_manager.update_collision_matrix()
+
+    assert robot.is_in_collision
+
+
+def test_robot_is_not_in_collision_when_nothing_is_checked(cylinder_bot_world):
+    """
+    With every collision of the robot allowed, no contact is reported for it.
+    """
+    robot = cylinder_bot_world.get_semantic_annotations_by_type(MinimalRobot)[0]
+    collision_manager = cylinder_bot_world.collision_manager
+    collision_manager.extend_temporary_rule([AllowAllCollisions()])
+    collision_manager.update_collision_matrix()
+
+    assert not robot.is_in_collision

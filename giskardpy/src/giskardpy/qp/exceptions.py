@@ -59,9 +59,28 @@ class InfeasibleException(QPSolverException):
 
 
 @dataclass
+class QuadraticObjectiveUnsupportedError(QPSolverException):
+    """
+    Raised when a linear program solver is given a problem with a quadratic objective.
+    """
+
+    solver_name: str
+    """
+    The name of the solver that only accepts linear objectives.
+    """
+
+    def error_message(self) -> str:
+        return f"{self.solver_name} only solves linear programs, but the problem has non-zero quadratic weights."
+
+    def suggest_correction(self) -> str:
+        return "Use a quadratic program solver for this problem."
+
+
+@dataclass
 class VelocityLimitUnreachableException(QPSolverException):
     """
-    Raised when a degree of freedom cannot reach its velocity limit within the prediction horizon.
+    Raised when a degree of freedom cannot reach its velocity limit within the
+    prediction horizon.
     """
 
     degree_of_freedom_name: str
@@ -139,7 +158,8 @@ class EmptyProblemException(InfeasibleException, DontPrintStackTrace):
 @dataclass
 class MismatchedLimitLengthsError(GiskardException):
     """
-    Raised when the bounds, weights, and names of a DirectLimits do not all share the same length.
+    Raised when the bounds, weights, and names of a DirectLimits do not all share the
+    same length.
     """
 
     field_lengths: dict[str, int]
@@ -157,7 +177,8 @@ class MismatchedLimitLengthsError(GiskardException):
 @dataclass
 class ConstraintTypeMismatchError(QPSolverException):
     """
-    Raised when an enforcement strategy receives a constraint of the wrong type for the requested bounds.
+    Raised when an enforcement strategy receives a constraint of the wrong type for the
+    requested bounds.
     """
 
     strategy_name: str
