@@ -44,6 +44,7 @@ from semantic_digital_twin.spatial_types.derivatives import Derivatives, Derivat
 # from semantic_digital_twin.spatial_types.math import rotation_matrix_from_rpy
 from semantic_digital_twin.spatial_types.spatial_types import (
     HomogeneousTransformationMatrix,
+    Pose2D,
     RotationMatrix,
 )
 from semantic_digital_twin.testing import StateChangeCounter, world_setup
@@ -552,6 +553,28 @@ def test_compute_relative_pose(world_setup):
     )
 
     np.testing.assert_array_almost_equal(relative_pose.to_np(), expected_pose.to_np())
+
+
+def test_transform_a_pose_2d(world_setup):
+    """
+    A Pose2D carries no z, roll or pitch, so transforming one answers with the
+    transformed 3D pose flattened back onto the target frame's plane.
+    """
+    world, l1, l2, bf, r1, r2 = world_setup
+    connection: PrismaticConnection = world.get_connection(l1, l2)
+    world.state[connection.dof.id].position = 1.0
+    world.notify_state_change()
+
+    pose_2d = Pose2D(x=2.0, y=0.5, yaw=0.3, reference_frame=l2)
+
+    relative_pose_2d = world.transform(pose_2d, l1)
+
+    assert isinstance(relative_pose_2d, Pose2D)
+    assert relative_pose_2d.reference_frame == l1
+    np.testing.assert_array_almost_equal(
+        relative_pose_2d.to_np(),
+        Pose2D.from_pose(world.transform(pose_2d.to_pose(), l1)).to_np(),
+    )
 
 
 def test_compute_relative_pose_both(world_setup):
@@ -2810,6 +2833,29 @@ def test_world_does_not_record_removing_a_semantic_annotation_it_does_not_hold()
 
     assert recorded_modifications(other_world) == []
     assert annotation in world.semantic_annotations
+
+
+def test_removing_a_semantic_annotation_keeps_an_equal_one():
+    """
+    Removing one of two equal semantic annotations removes that instance and keeps the
+    other one in the world.
+    """
+    world = World()
+    body = Body(name=PrefixedName("milk"))
+    kept = Milk(root=body)
+    removed = Milk(root=body)
+    with world.modify_world():
+        world.add_kinematic_structure_entity(body)
+        world.add_semantic_annotation(kept)
+    with world.modify_world():
+        world.add_semantic_annotation(removed)
+
+    with world.modify_world():
+        world.remove_semantic_annotation(removed)
+
+    assert len(world.semantic_annotations) == 1
+    assert world.semantic_annotations[0] is kept
+    assert kept._world is world
 
 
 def test_world_does_not_record_removing_an_actuator_it_does_not_hold():

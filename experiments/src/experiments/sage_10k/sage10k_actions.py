@@ -16,7 +16,6 @@ from semantic_digital_twin.spatial_types import Point2, Pose2D, Pose
 from semantic_digital_twin.world_description.graph_of_convex_sets.boxes import (
     PlanarGraphOfBoundingBoxes,
 )
-from semantic_digital_twin.exceptions import PointOccupiedError
 
 
 @dataclass
@@ -59,10 +58,6 @@ class Sage10kOpenDoor(ActionDescription):
         # Find a node in free space that is near the pre-grasp pose. gcs is planar, so
         # the query point is its floor-plane projection, not the full 3D position.
         target_node = gcs.node_of_point(Point2.from_pose(pre_grasp_pose))
-        if target_node is None:
-            raise PointOccupiedError(
-                self.world.transform(pre_grasp_pose, self.world.root).position
-            )
 
         gcs = gcs.create_subgraph(
             list(
@@ -93,7 +88,7 @@ class Sage10kOpenDoor(ActionDescription):
         # -- appended directly rather than via Match.where(), since that would re-add
         # it to the Entity a second time.
         free_space_condition = gcs.constrain_to_free_space(
-            reach_query.expression.target_pose_offset_robot
+            reach_query.target_pose_offset_robot
         )
         reach_query._where_conditions_.append(free_space_condition)
         reach_action = reach_query

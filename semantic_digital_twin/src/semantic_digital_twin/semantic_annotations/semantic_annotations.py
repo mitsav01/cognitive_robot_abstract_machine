@@ -662,6 +662,17 @@ class Drawer(Furniture, HasCaseAsRootBody, HasHandle, HasMechanicalJoint):
     def _hole_direction_axis(cls) -> Vector3:
         return Vector3.Z()
 
+    @property
+    def opening_ratio(self) -> float:
+        """
+        :return: How far this drawer stands pulled out, as a fraction of its travel.
+        """
+        connection = self.root.parent_connection
+        limits = connection.dof.limits
+        return (connection.position - limits.lower.position) / (
+            limits.upper.position - limits.lower.position
+        )
+
 
 @dataclass(eq=False)
 class Elevator(HasCaseAsRootBody, HasDoors, HasMechanicalJoint):
@@ -898,7 +909,10 @@ class Wall(HasApertures):
         return [
             door
             for door in self._world.get_semantic_annotations_by_type(Door)
-            if door.entry_way and InsideOf(door.entry_way.root, self.root)() > 0.1
+            if door.entry_way
+            and InsideOf(
+                door.entry_way.root, self.root, minimum_containment_ratio=0.1
+            )()
         ]
 
     @classmethod
@@ -954,7 +968,7 @@ class Wall(HasApertures):
         origin: HomogeneousTransformationMatrix,
         bloat_amount: float,
         obstacle_height_clearance: float = 0.01,
-    ) -> BoundingBoxCollection[VolumetricBoundingBox]:
+    ) -> BoundingBoxCollection[VolumetricBoundingBox, Point3]:
         """
         Bloat this wall's bounding boxes along their thinner dimension only -- the
         side that faces the room -- rather than symmetrically in x and y.
@@ -1517,7 +1531,7 @@ class SemanticEnvironmentAnnotation(HasRootBody):
     """
 
     def obstacle_entities(
-        self, search_space: BoundingBoxCollection[VolumetricBoundingBox]
+        self, search_space: BoundingBoxCollection[VolumetricBoundingBox, Point3]
     ) -> List[Body]:
         """
         Collect the obstacle bodies to consider within ``search_space``.
@@ -1538,12 +1552,12 @@ class SemanticEnvironmentAnnotation(HasRootBody):
 
     def build_bloated_obstacle_collection(
         self,
-        search_space: BoundingBoxCollection[VolumetricBoundingBox],
+        search_space: BoundingBoxCollection[VolumetricBoundingBox, Point3],
         semantic_wall_annotation: Optional[Wall] = None,
         bloat_obstacles: float = 0.0,
         bloat_walls: float = 0.0,
         obstacle_height_clearance: float = 0.01,
-    ) -> BoundingBoxCollection[VolumetricBoundingBox]:
+    ) -> BoundingBoxCollection[VolumetricBoundingBox, Point3]:
         """
         Collect and bloat this annotation's obstacle bounding boxes.
 
