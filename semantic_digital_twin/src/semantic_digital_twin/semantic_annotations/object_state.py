@@ -24,7 +24,7 @@ from semantic_digital_twin.world_description.world_entity import (
 )
 
 if TYPE_CHECKING:
-    from .state_manager import DynamicStateManager
+    from semantic_digital_twin.semantic_annotations.state_manager import DynamicStateManager
 
 
 # ============================================================================
@@ -164,6 +164,20 @@ class IsCut(Predicate):
     min_confidence: float = 0.8
     max_age_sec: Optional[float] = None
 
+    @classmethod
+    def _verbalization_fragment_(cls, fields) -> VerbalizationFragment:
+        from krrood.entity_query_language.verbalization.vocabulary.parts_of_speech import (
+            clause,
+            Copula,
+            Noun,
+            Adjective,
+        )
+        return clause(
+            Noun(fields["entity_id"]),
+            Copula(),
+            Adjective("cut"),
+        )
+
     def __call__(self) -> bool:
         state = self.manager.get_current_state_by_type(self.entity_id, CutState)
         self.manager.validate_state_safety(state, self.min_confidence, self.max_age_sec)
@@ -179,6 +193,20 @@ class IsFilled(Predicate):
     min_confidence: float = 0.8
     max_age_sec: Optional[float] = None
 
+    @classmethod
+    def _verbalization_fragment_(cls, fields) -> VerbalizationFragment:
+        from krrood.entity_query_language.verbalization.vocabulary.parts_of_speech import (
+            clause,
+            Copula,
+            Noun,
+            Adjective,
+        )
+        return clause(
+            Noun(fields["entity_id"]),
+            Copula(),
+            Adjective("filled"),
+        )
+
     def __call__(self) -> bool:
         state = self.manager.get_current_state_by_type(self.entity_id, FillState)
         self.manager.validate_state_safety(state, self.min_confidence, self.max_age_sec)
@@ -193,6 +221,20 @@ class IsEmpty(Predicate):
     entity_id: str
     min_confidence: float = 0.8
     max_age_sec: Optional[float] = None
+
+    @classmethod
+    def _verbalization_fragment_(cls, fields) -> VerbalizationFragment:
+        from krrood.entity_query_language.verbalization.vocabulary.parts_of_speech import (
+            clause,
+            Copula,
+            Noun,
+            Adjective,
+        )
+        return clause(
+            Noun(fields["entity_id"]),
+            Copula(),
+            Adjective("empty"),
+        )
 
     def __call__(self) -> bool:
         state = self.manager.get_current_state_by_type(self.entity_id, FillState)

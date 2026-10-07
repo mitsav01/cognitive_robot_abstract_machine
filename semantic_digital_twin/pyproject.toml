@@ -48,6 +48,7 @@ dependencies = [
     "polytope",
     "ortools",
     "fbxloader",
+    "pytest-xdist",
     "coacd",
     "pymysql",
     "pyglet==1.5.31",

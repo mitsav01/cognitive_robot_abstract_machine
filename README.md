@@ -1,319 +1,425 @@
-# Cognitive Robot Abstract Machine (CRAM)
+# VESPER: Action-Aware Multimodal Object State Verification for Semantic Digital Twins
 
-Monorepo for the CRAM cognitive architecture. 
+[![ROS 2](https://img.shields.io/badge/ROS_2-Humble_%7C_Jazzy-22314E?logo=ros&logoColor=white)](https://docs.ros.org/)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Tests](https://img.shields.io/badge/Tests-16%20Passing-brightgreen)](https://github.com/)
 
-## Installation
+**VESPER** is an action-aware temporal perception and state-verification framework designed for robotic manipulation. It
+combines open-vocabulary visual perception, temporal evidence arbitration, robot action context, and Semantic Digital
+Twins (SDT) to convert uncertain visual observations into persistent, symbolic object-state representations.
 
-### Clone the repo and its submodules
-Pull the submodules:
+---
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Key Idea & Conceptual Pipeline](#key-idea--conceptual-pipeline)
+- [Core Contributions](#core-contributions)
+- [System Architecture](#system-architecture)
+- [Multimodal Perception Pipeline](#multimodal-perception-pipeline)
+- [State Representation & Transitions](#state-representation--transitions)
+- [Repository Structure](#repository-structure)
+- [Hardware & Software Stack](#hardware--software-stack)
+- [Dataset & Evaluation](#dataset--evaluation)
+  - [Dataset Composition](#dataset-composition)
+  - [Experimental Results](#experimental-results)
+- [Quickstart & Verification Demo](#quickstart--verification-demo)
+- [Running Automated Tests](#running-automated-tests)
+- [Design Principles & Research Questions](#design-principles--research-questions)
+- [Citation](#citation)
+- [License & Acknowledgements](#license--acknowledgements)
+
+---
+
+## Overview
+
+Robots operating in open-world environments must continuously verify whether objects have changed physical state as a
+consequence of manipulation actions:
+
+- *Is a container still empty?*
+- *Has a vessel become filled after a pouring trajectory?*
+- *Has an ingredient been cut?*
+- *Did an observed transition actually occur, or was it a transient visual artifact caused by gripper occlusion or
+  motion blur?*
+
+Modern Vision-Language Models (VLMs) offer rich open-vocabulary visual reasoning, but **a frame-level inference should
+not automatically become a persistent symbolic belief**.
+
+Visual evidence during manipulation is degraded by:
+
+1. **Perceptual variability:** Fluctuations in illumination, viewpoint, sensor noise, and specular reflections.
+2. **Action-induced occlusion:** Physical obstruction of the object by the robot arm, end-effector, or manipulated
+   tools.
+3. **Temporal prediction instability:** Frame-to-frame label flicker inherent to zero-shot neural classifiers.
+4. **Delayed physical observables:** Physical state changes whose final visual evidence only manifests once an action
+   completes and clearance is restored.
+5. **The Neural-Symbolic semantic gap:** Unreconciled perceptual data prematurely corrupting high-level planning
+   representations.
+
+VESPER bridges this gap via an intermediate **action-aware temporal arbitration layer** situated between continuous
+visual evidence and symbolic state commitment.
+
+> **Central Principle:**  
+> *A visual observation is evidence about an object state; it is not automatically the committed symbolic state of the
+object.*
+
+---
+
+## Key Idea & Conceptual Pipeline
+
+VESPER decouples transient perception from persistent belief updates across five explicit stages:
+
+$$\text{Observation} \longrightarrow \text{Evidence} \longrightarrow \text{Arbitration} \longrightarrow \text{Commitment} \longrightarrow \text{Representation}$$
+
+```
+        RGB-D Camera + Robot Action Context
+                         │
+                         ▼
+              Object / Region Grounding
+                    OWLv2 / Vision
+                         │
+                         ▼
+                VLM State Evidence
+                  SigLIP 2 / VLM
+                         │
+                         ▼
+              Temporal State Arbitration
+                         │
+             ┌───────────┴───────────┐
+             │                       │
+       Evidence Unstable       Evidence Supported
+             │                       │
+             ▼                       ▼
+       Hold / Reject            Commit State
+                                     │
+                                     ▼
+                           Semantic Digital Twin
+                                     │
+                                     ▼
+                         Persistent Symbolic State
+```
+
+---
+
+## Core Contributions
+
+### 1. Action-Aware Temporal State Arbitration
+
+VESPER factors execution phase context into perceptual interpretation. During dynamic manipulation (e.g., pouring), the
+manipulator frequently occludes the Region of Interest (RoI). Instead of reacting to momentary occlusion artifacts,
+VESPER flags observations during manipulation as **transitional evidence**, deferring symbolic commitment until
+post-action visual clearance is restored.
+
+```
+Action Starts ──► Visual Access Drops ──► Hold Candidate ──► Action Ends ──► View Restored ──► Commit to SDT
+```
+
+### 2. Bounded Temporal State Memory
+
+The `DynamicStateManager` maintains historical object-state observations through time-bounded ring buffers
+(`deque(maxlen=N)`):
+
+* Object-indexed temporal state tracking
+* Timestamped observation logs with confidence metrics and provenance
+* Duplicate observation suppression and sliding-window pruning
+* Point-in-time state reconstruction: `get_state_at(timestamp)`
+
+### 3. Evidence-Aware State Commitment
+
+Belief stability does not equal physical correctness. Repeated noisy classifications can appear stable without being
+physically true. VESPER decouples:
+
+- **Visual Evidence:** Instantaneous VLM similarity scores.
+- **Candidate State:** Uncommitted target label hypotheses.
+- **Temporal Support:** Rolling multi-frame observation density.
+- **Action Context:** Execution status of the physical robot.
+- **Committed State:** Grounded symbolic predicate in the digital twin.
+
+### 4. Semantic Digital Twin (SDT) Integration
+
+Verified states mutate the underlying Semantic Digital Twin, exposing typed symbolic predicates for task planning and
+plan monitoring:
+
+* `IsEmpty(object)`
+* `IsFilled(object)`
+* `IsFull(object)`
+* `IsCut(object)`
+
+---
+
+## System Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Physical Robot System                    │
+│                                                             │
+│  RGB-D Camera                          Robot Actions        │
+│      │                                      │               │
+└──────┼──────────────────────────────────────┼───────────────┘
+       │                                      │
+       ▼                                      ▼
+┌──────────────────┐                 ┌──────────────────┐
+│ Object Grounding │                 │  Action Context  │
+│     OWLv2        │                 │  Pour / Fill /   │
+│                  │                 │   Manipulation   │
+└────────┬─────────┘                 └────────┬─────────┘
+         │                                    │
+         └────────────────┬───────────────────┘
+                          ▼
+                 ┌───────────────────┐
+                 │   VLM Evidence    │
+                 │     SigLIP 2      │
+                 │ state + confidence│
+                 └─────────┬─────────┘
+                           │
+                           ▼
+                 ┌───────────────────┐
+                 │ Temporal + Action │
+                 │    Arbitration    │
+                 │ hold / reject     │
+                 │ support / commit  │
+                 └─────────┬─────────┘
+                           │
+                           ▼
+                 ┌───────────────────┐
+                 │   Dynamic State   │
+                 │      Manager      │
+                 │  bounded history  │
+                 │  provenance cache │
+                 └─────────┬─────────┘
+                           │
+                           ▼
+                 ┌───────────────────┐
+                 │ Semantic Digital  │
+                 │       Twin        │
+                 │  symbolic state   │
+                 │    predicates     │
+                 └───────────────────┘
+```
+
+---
+
+## Multimodal Perception Pipeline
+
+The runtime pipeline executes across seven modular stages:
+
+```
+Observe ──► Estimate ──► Stabilize ──► Verify ──► Validate ──► Commit ──► Represent
+```
+
+1. **Observe:** Ingest calibrated RGB-D frames from the active camera feed.
+2. **Estimate:** Ground target objects via **OWLv2** bounding box proposals; query **SigLIP 2** for zero-shot
+   text-prompt similarity against state hypotheses (e.g., `"empty mug"`, `"filled mug"`, `"full mug"`).
+3. **Stabilize:** Buffer observations and suppress consecutive duplicate reports.
+4. **Verify:** Screen candidate states against temporal confidence thresholds.
+5. **Validate:** Cross-reference active robot trajectories; defer commitment during unverified or occluded motions.
+6. **Commit:** Mutate persistent state within `DynamicStateManager` once arbitration criteria are satisfied.
+7. **Represent:** Propagate validated predicates into the Semantic Digital Twin for downstream executive systems (e.g.,
+   CRAM).
+
+---
+
+## State Representation & Transitions
+
+The primary experimental prototype handles container manipulation states:
+
+```
+                 ┌─────────────┐
+                 │    EMPTY    │
+                 └──────┬──────┘
+                        │ Fill / Pour
+                        ▼
+                 ┌─────────────┐
+                 │   FILLED    │
+                 └──────┬──────┘
+                        │ Continued Fill
+                        ▼
+                 ┌─────────────┐
+                 │    FULL     │
+                 └─────────────┘
+```
+
+Observation-conditioned transitions accommodate real-world perceptual uncertainty:
+
+* $\text{EMPTY} \longrightarrow \{\text{EMPTY}, \text{FILLED}\}$
+* $\text{FILLED} \longrightarrow \{\text{EMPTY}, \text{FILLED}, \text{FULL}\}$
+* $\text{FULL} \longrightarrow \{\text{FILLED}, \text{FULL}\}$
+
+*(Extensions for cutting and food preparation support states such as `CUT` and `UNCUT`.)*
+
+---
+
+## Repository Structure
+
+| Component                    | Filepath                                                                                | Description                                           |
+|:-----------------------------|:----------------------------------------------------------------------------------------|:------------------------------------------------------|
+| **Object State Abstraction** | `semantic_digital_twin/src/semantic_digital_twin/semantic_annotations/object_state.py`  | Core semantic state definitions and classes           |
+| **Dynamic State Manager**    | `semantic_digital_twin/src/semantic_digital_twin/semantic_annotations/state_manager.py` | Bounded temporal state memory and arbitration engine  |
+| **EQL Predicates**           | `semantic_digital_twin/src/semantic_digital_twin/semantic_annotations/object_state.py`  | Symbolic state predicates for digital twin queries    |
+| **Object-State Tests**       | `test/semantic_digital_twin_test/test_semantic_annotations/test_object_state.py`        | Unit tests for state models and mutations             |
+| **State-Manager Tests**      | `test/semantic_digital_twin_test/test_semantic_annotations/test_state_manager.py`       | Unit tests for temporal buffers and arbitration logic |
+| **Verification Demo**        | `experiments/src/experiments/object_state_estimation/run_object_state_verification.py`  | Standalone demonstration pipeline                     |
+| **Action Execution**         | `coraplex/`                                                                             | Robot skill dispatching and action state tracking     |
+| **Motion Planning**          | `giskardpy/`                                                                            | Whole-body motion planning and kinematic execution    |
+
+---
+
+## Hardware & Software Stack
+
+* **Manipulator Platform:** PAL Robotics TIAGo
+* **Perception Hardware:** RGB-D Head Camera (structure-light / ToF)
+* **Vision Backends:** OWLv2 (open-vocabulary grounding), SigLIP 2 (vision-language similarity), OpenCV
+* **Middleware & Environment:** ROS 2 (Humble / Jazzy), PyTorch
+* **Cognitive Architecture:** CRAM, GiskardPy, Semantic Digital Twin (SDT)
+
+---
+
+## Dataset & Evaluation
+
+### Dataset Composition
+
+The benchmark evaluation comprises tabletop manipulation observations collected across multiple experimental kitchen
+environments (`vorstrasse`, `iai_kueche`), alongside **25 continuous pouring interaction videos**.
+
+| Class Label      | Frame Count |
+|:-----------------|:------------|
+| `EMPTY`          | 347         |
+| `FILLED`         | 209         |
+| `FULL`           | 161         |
+| **Total Frames** | **717**     |
+
+### Experimental Results
+
+| Metric                       | Baseline VLM (Per-Frame) | VESPER (Canonical Temporal Arbitration) |
+|:-----------------------------|:------------------------:|:---------------------------------------:|
+| **Frame Accuracy**           |        **81.73%**        |                 66.14%*                 |
+| **Macro-F1**                 |        **80.45%**        |                 58.07%                  |
+| **State-Switch Rate**        |            —             |              **4.146 s⁻¹**              |
+| **Settlement Rate**          |            —             |            **56.2%** (9/16)             |
+| **Final-State Verification** |            —             |            **72.0%** (18/25)            |
+| **Action Support Ratio**     |            —             |                **93.8%**                |
+| **Mean Evidence Support**    |            —             |                **0.504**                |
+
+> *\*Note on Frame-Level Metrics:*  
+> Frame accuracy penalizes deferred commits during active transitions because the ground-truth label updates before
+> visual clearance allows safe arbitration. VESPER trades instantaneous frame-matching accuracy for symbolic belief
+> stability, successfully suppressing transient state-flicker during physical manipulation.
+
+### Computational Latency
+
+* **Perception (OWLv2 + SigLIP 2):** $\sim 150 - 300\text{ ms / frame}$
+* **Arbitration Engine:** $< 0.5\text{ ms / frame}$
+* **Arbitration Overhead:** $\sim 0.34\%$
+
+---
+
+## Quickstart & Verification Demo
+
+To test temporal state management, duplicate suppression, and action-context arbitration independently of the full robot
+hardware stack:
+
 ```bash
-git clone https://github.com/cram2/cognitive_robot_abstract_machine.git
-cd cognitive_robot_abstract_machine
-git submodule update --init --recursive
+# Clone the repository
+git clone https://github.com/your-org/vesper.git
+cd vesper
+
+# Run the standalone verification demonstration
+python experiments/src/experiments/object_state_estimation/run_object_state_verification.py
 ```
 
-### CRAM Architecture Installation
+### Trace Output
 
-To install the CRAM architecture, follow these steps:
+```text
+============================================================
+VESPER: Dynamic State Verification & Temporal Memory Demo
+============================================================
 
-Setup the Python venvironment:
+[Phase 1: Initial Perception]
+Observation:     EMPTY (conf: 0.94)
+Semantic query:  IsEmpty() -> True | IsFilled() -> False
+
+[Phase 2: Repeated Observation]
+Repeated EMPTY evidence received.
+Temporal manager: duplicate observation suppressed.
+
+[Phase 3: Active Manipulation]
+Robot action:    POURING
+Visual access:   partially occluded
+Candidate:       FILLED (conf: 0.45)
+Arbitration:     transitional evidence -> commitment deferred
+
+[Phase 4: Post-Action Settlement]
+Robot action:    COMPLETED
+Visual access:   restored
+Candidate:       FILLED (conf: 0.91)
+Arbitration:     support criteria met -> state committed to FILLED
+
+[Phase 5: Temporal Query]
+Historical query: get_state_at(t_pre_action)
+Result:           EMPTY
+============================================================
+Verification demonstration completed
+============================================================
+```
+
+---
+
+## Running Automated Tests
+
+The framework includes a unit-test suite checking temporal container bounds, timestamp preservation, and predicate
+integrity:
 
 ```bash
-sudo apt install -y virtualenv virtualenvwrapper && \
-grep -qxF 'export WORKON_HOME=$HOME/.virtualenvs' ~/.bashrc || echo 'export WORKON_HOME=$HOME/.virtualenvs' >> ~/.bashrc && \
-grep -qxF 'export VIRTUALENVWRAPPER_PYTHON=/usr/bin/python3' ~/.bashrc || echo 'export VIRTUALENVWRAPPER_PYTHON=/usr/bin/python3' >> ~/.bashrc && \
-grep -qxF 'source /usr/share/virtualenvwrapper/virtualenvwrapper.sh' ~/.bashrc || echo 'source /usr/share/virtualenvwrapper/virtualenvwrapper.sh' >> ~/.bashrc && \
-source ~/.bashrc && \
-mkvirtualenv cram-env --system-site-packages
-```
-Activate / deactivate
+# Test semantic state model abstractions
+pytest test/semantic_digital_twin_test/test_semantic_annotations/test_object_state.py -v
 
-```
-workon cram-env
-deactivate
+# Test dynamic state manager and ring-buffer arbitration
+pytest test/semantic_digital_twin_test/test_semantic_annotations/test_state_manager.py -v
 ```
 
-#### Optional: Setup your ROS Workspace
-To run the tests or use CRAM with a real robot you need to setup a ROS workspace with the dependencies. 
-The monorepo provides a shell script to setup the workspace for you. 
-```bash
-export OVERLAY_WS=$HOME/ros_ws
-./scripts/setup_ros_workspace.sh
-```
-This will create a ROS workspace in the folder specified in OVERLAY_WS
+---
 
-### Install additional dependencies
+## Design Principles & Research Questions
 
-You need to install the following system dependencies:
+1. **Observation $\neq$ Belief:** Sensory detection is inconclusive evidence, not ground-truth reality.
+2. **Stability $\neq$ Correctness:** Persistent erroneous classifications must be checked against action plausibility.
+3. **Action Context is Foundational:** The physical state change is intrinsically coupled to the robot's physical
+   trajectory.
+4. **Symbolic Persistence:** World states must remain invariant to momentary sensory dropouts or sensor occlusions.
 
-```bash
-sudo apt install -y graphviz graphviz-dev
-```
+### Research Questions
 
+* **RQ1 (Temporal Robustness):** Can temporal arbitration suppress spurious state transitions caused by stochastic
+  frame-level VLM outputs?
+* **RQ2 (Action Awareness):** Does incorporating robot execution context resolve sensory ambiguities induced by physical
+  occlusion?
+* **RQ3 (Symbolic Commitment):** How can probabilistic neural similarity scores be reliably mapped onto discrete,
+  persistent world models?
+* **RQ4 (Digital Twin Grounding):** Can verified perceptual hypotheses update a Semantic Digital Twin sufficiently to
+  support closed-loop task execution?
 
-### Install using UV
+---
 
-To install the whole repo we use uv (https://github.com/astral-sh/uv), first to install uv:
+## Citation
 
-```bash 
-# On macOS and Linux.
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
+If you use VESPER in your academic research, please cite the following work:
 
-then install packages:
-
-```bash
-uv sync --active
-```
-
-If you also want the development dependencies, run:
-
-```bash
-uv sync --extra dev --active 
+```bibtex
+@mastersthesis{savsaviya2026vesper,
+  author  = {Savsaviya, Mitesh},
+  title   = {Action-Aware Neuro-Symbolic Object State Verification using Vision-Language Models and Semantic Digital Twins},
+  school  = {University of Bremen},
+  year    = {2026}
+}
 ```
 
-`semantic_digital_twin`'s Drake-based IRIS/GCS features (and their tests, `test/semantic_digital_twin_test/test_worlds/test_gcs_polygons.py`) need the optional `iris` extra on top of that - it is layered on separately since Drake is a large, `semantic_digital_twin`-specific dependency:
+---
 
-```bash
-uv sync --package semantic_digital_twin --extra iris --active --inexact
-```
+## License & Acknowledgements
 
-Running the test suite does not require any dataset-loading dependencies (Drake, py7zr, usd-core/pxr) - tests that need one of these skip cleanly when it is not installed. To actually load GraspClutter6D or ArtVIP datasets (or run their tests against the real packages), add the `datasets` extra the same way:
+This project is licensed under the **Apache License 2.0**. See the [LICENSE](LICENSE) file for details.
 
-```bash
-uv sync --package semantic_digital_twin --extra datasets --active --inexact
-```
-
-
-### Alternative: Poetry
-
-Alternatively you can use poetry to install all packages in the repository.
-
-Install poetry if you haven't already:
-
-```bash
-pip install poetry
-```
-
-Install the CRAM package along with its dependencies:
-
-```bash
-poetry install
-```
-
-## Browser visualization
-
-The workspace includes [CRAMERA](cramera/README.md) for live 3D visualization,
-recorded playback, EQL questions and plan/statechart inspection. Start `cramera`
-from the activated environment, then run an existing demo with
-`cramera-live path/to/demo.py`.
-
-## To run tests
-
-**1. Install system dependencies, set up and build the ROS 2 workspace**
-
-```bash
-sudo bash .github/docker/setup_ros_workspace.sh && source ~/.bashrc
-```
-
-**2. Run a test**
-
-```bash
-pytest test/<package>_test
-```
-
-e.g. `pytest test/coraplex_test`
-
-## Developer / Agent Tooling
-
-`.claude/` holds tooling for AI coding agents (Claude Code) working in this
-repository - hooks that run automatically each session, and skills invoked
-on demand (`/<skill-name>`). Each is documented where it lives; the links
-below are a starting point, not a duplicate of that documentation.
-
-**New here? Start with [`.claude/SETUP.md`](.claude/SETUP.md)** - the one-time
-setup in three steps, including what to change in your fork, your GitHub
-access and your Claude environment.
-[`.claude/hooks/README.md`](.claude/hooks/README.md) is the reference behind
-it: what the setup configures, and everything it unlocks (personal notes,
-per-PR progress tracking, multi-PR plan dashboards).
-
-- **[`.claude/hooks/`](.claude/hooks/README.md)** - a `SessionStart` hook
-  that carries a contributor's own personal workflow notes, per-PR
-  plan/progress tracking, and multi-PR plan manifests across sessions via a
-  personal (gitignored, never-merged) branch, with zero required
-  configuration.
-- **[`.claude/skills/plan-dashboard/`](.claude/skills/plan-dashboard/SKILL.md)** -
-  publishes a live status dashboard for a multi-PR/multi-session
-  initiative, cross-checked against live GitHub PR/CI/review state so a
-  plan's manually-tracked status can never silently drift from reality. See
-  [`example-walkthrough.md`](.claude/skills/plan-dashboard/example-walkthrough.md)
-  for a short, worked example - idea to dashboard, with screenshots.
-- **[`.claude/skills/plan-create/`](.claude/skills/plan-create/SKILL.md)** -
-  bootstraps a new multi-PR/multi-session plan (or migrates an existing
-  freeform roadmap doc into one), validated against the same schema
-  `plan-dashboard` reads.
-- **[`.claude/skills/plan-item-kickoff/`](.claude/skills/plan-item-kickoff/SKILL.md)** -
-  gathers everything available about one tracked plan item (its manifest
-  entry, roadmap history, dependency chain's live state, sibling-item
-  patterns) and proposes an implementation plan via plan mode, without
-  writing any code. The "Start now" button on a not-started item's
-  dashboard card copies the invoking command for this skill.
-- **[`.claude/skills/plan-item-resolve/`](.claude/skills/plan-item-resolve/SKILL.md)** -
-  gathers everything available about one already-underway item (its
-  branch/PR state, CI, review comments, tracking-issue discussion, recorded
-  blockers) and proposes a plan to resolve whatever is stalling it, via plan
-  mode, without writing any code. The "Resolve"/"Resume"/"Reconsider" button
-  on a blocked/in-progress/deferred item's dashboard card copies the
-  invoking command for this skill.
-- **[`.claude/skills/add-plan-item/`](.claude/skills/add-plan-item/SKILL.md)** -
-  decides where a newly described piece of work belongs - folded into an
-  unlanded item, a new item in an existing plan, a plan of its own, or
-  tracked nowhere - by running the shared scope check in
-  [`scope-decision.md`](.claude/skills/add-plan-item/scope-decision.md)
-  against live branch and PR state, then proposes the outcome via plan mode.
-- **[`.claude/skills/stacked-pr-maintenance/`](.claude/skills/stacked-pr-maintenance/SKILL.md)** -
-  runs one maintenance pass over a stacked-PR fork-staging workflow: reparents any pull
-  request whose base has landed, closes what has landed by fast-forwarding, restacks
-  branches whose parent moved, and builds the promotion link for every approved,
-  unblocked branch. Deliberately never writes code - a conflict it cannot merge cleanly,
-  or a red check, is reported to the branch's owner and skipped. Invoke it by hand when
-  the stack needs a pass, or register it as a scheduled Routine using the template in
-  [`routine-prompt.md`](.claude/skills/stacked-pr-maintenance/routine-prompt.md). The
-  workflow it maintains, and the read-only tool it computes with, are described in
-  [`.claude/stack/README.md`](.claude/stack/README.md).
-- **[`.claude/skills/local-code-review/`](.claude/skills/local-code-review/SKILL.md)** -
-  reviews the current branch against upstream `main` for bugs and
-  `AGENTS.md` adherence, then hands back an approval-gated plan to fix every
-  finding (including adding missing tests) before you push.
-
-## Contribution
-
-Before committing any changes, please navigate into the project root and install pre-commit hooks:
-
-```bash
-sudo apt install pre-commit
-pre-commit install
-```
-
-### Code of Conduct
-
-> Any code added to the repository must have at least an 85% test coverage.
-
-🚀 How to Create a Pull Request (PR) in Our System
-
-This guide outlines the best practices for creating a Pull Request in our system to ensure high-quality, maintainable, and robust code.
-
-1. 🤖 AI Code Review First (Pre-PR Check)
-
-    Before submitting your PR, let AI review your code to catch common issues and suggest improvements.
-
-    - GitHub Copilot Reviewer: You can integrate GitHub Copilot as a reviewer directly into your PR process.
-
-    - PyCharm Integration: Alternatively, use AI features directly within PyCharm for an immediate local review.
-
-2. 🛡️ Embrace Test-Driven Thinking
-
-    Our process is Test-Driven Development (TDD):
-
-    - Bug Fixes: If you find a bug, your first step is to write a test that fails (reproduces the bug). Push this failing test, then implement the fix, and ensure the test now passes.
-
-    - The Beyoncé Rule: "If you like it, you should put a test on it." Every new feature or piece of logic needs corresponding tests.
-
-3. 🎯 Focus on Method Quality and Complexity
-
-    - Method Length/Complexity: Keep your methods concise and focused. If the cyclomatic complexity (which you can check using plugins like Code Complexity for JetBrains) reaches the hundreds, your method is highly likely to need refactoring/improvement.
-
-    - Helper Methods: Extract duplicate code into helper methods to adhere to the Don't Repeat Yourself (DRY) principle.
-
-    - Modularity/Plugin Thinking: Think modularly. Code should be designed with a plugin-like approach, making components easily interchangeable or extendable.
-
-    - Side Effects & Entanglement: Methods should be decoupled (not entangled) and should not have hidden side effects. They should ideally do one thing and do it well, following the Single Responsibility Principle (SRP) from SOLID.
-Example:
-        ```python
-        counter = 0      # outer scope state
-
-        def increment_counter():
-            global counter
-            counter += 1   # side effect: modifies outer scope state
-            print(f"Counter is now {counter}")  # side effect: I/O
-        ```
-
-4. 📐 Adhere to Code Style and Principles
-
-    - Code Formatting: We use Black, which is fully PEP 8 compliant. All code must be automatically formatted with Black before submission.
-
-    - SOLID Principles: Read and understand the SOLID principles for writing robust, maintainable, and scalable software. This article is a great resource: https://realpython.com/solid-principles-python/
-
-5. ✍️ Naming, Typing, and Imports
-
-    - Descriptive Naming: Choose descriptive names for variables, functions, and classes. Names should clearly communicate intent.
-
-    - Correct Typing: Use correct type hints consistently throughout your code.
-
-    Import Strategy:
-
-    - Use absolute imports always within the package as this is easier to maintain and clearer to read and understand.
-
-    - Use relative imports always in tests when importing modules defined in the same test folder/package.
-
-    - When importing types, use typing extensions instead of typing or the standard library types;
-
-    - Avoid importing types directly from modules if you don't need to construct an instance of the type inside the module. Annotations can be imported with the TYPE_CHECKING guard.
-
-6. 📝 Documentation and Comments
-
-    - Non-Trivial Code: Document everything that is not trivial to understand.
-
-    - Avoid Over-Swaffling: Be concise. Do not use unnecessary, verbose explanations.
-
-    - Inline Comments: Use inline comments sparingly, primarily for explaining complex logic or a long block of code.
-
-7. 🔁 Final Review and Responsibility
-
-    - Human Review: Always perform a final human review of your own code before submitting the PR. Read it line-by-line as if you were the reviewer.
-
-    - "If you break it, you fix it" Rule: You are the primary owner and person responsible for the code you introduce. If a bug is found in your changes, you must prioritize its fix.
-
-    - The "One Change, One Commit" Rule: Each commit should be a logical, atomic unit of work.
-
-8. Post-Submission and Review 🔎
-
-    After you open your Pull Request (PR), it enters the review stage. This is a critical step for ensuring code quality and collaboration.
-
-    Responding to Feedback:
-
-    - Mindset is Key: Remember that code reviews are about the code, not you. Feedback is given to improve the project's quality and help you learn. Take all comments professionally and constructively.
-
-     - Addressing the Feedback: When a reviewer requests changes, you don't need to close the PR and start over! Simply make the required modifications in your local working directory.
-
-    - Commit and Push: Once the changes are made, create a new commit and push it to the same feature branch you used for the PR. The PR will automatically update with your new commits.
-                
-        ```
-        # 1. Make the changes locally...
-        git add .
-        git commit -m "Address review feedback on component X"
-        git push origin <your-feature-branch-name>
-        ```
-
-PR Checklist Summary
-
-    [ ] AI (Copilot/PyCharm) has reviewed the code.
-
-    [ ] Black has formatted the code (PEP 8 compliant).
-
-    [ ] New features/logic have tests (Beyoncé Rule).
-
-    [ ] Bug fixes include a test that reproduced the bug.
-
-    [ ] Methods are concise and low in complexity.
-
-    [ ] Descriptive names and correct type hints are used.
-
-    [ ] Relative importing is used correctly.
-
-    [ ] Non-trivial code is documented concisely.
-
-    [ ] Code is modular, decoupled, and adheres to SOLID principles.
-
-    [ ] Final personal human review complete.
+This research was developed within the **Cognitive Systems / Robotics Group at the University of Bremen (AICOR)**,
+integrating with the **CRAM** and **Semantic Digital Twin** ecosystem.
