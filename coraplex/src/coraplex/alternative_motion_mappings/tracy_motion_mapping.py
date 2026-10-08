@@ -8,7 +8,6 @@ from giskardpy.motion_statechart.ros2_nodes.ros_tasks import (
 from control_msgs.action import ParallelGripperCommand
 from semantic_digital_twin.robots.tracy import Tracy
 from coraplex.datastructures.enums import ExecutionType, Arms
-from coraplex.view_manager import ViewManager
 from coraplex.robot_plans import (
     MoveJointsMotion,
     MoveToolCenterPointMotion,

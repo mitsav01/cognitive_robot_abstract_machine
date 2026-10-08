@@ -4,8 +4,7 @@ from giskardpy.motion_statechart.goals.templates import Parallel
 from control_msgs.action import ParallelGripperCommand
 from coraplex.robot_plans.motions.base import AlternativeMotion
 from semantic_digital_twin.robots.tiago import Tiago
-from coraplex.datastructures.enums import ExecutionType, Arms
-from coraplex.view_manager import ViewManager
+from coraplex.datastructures.enums import ExecutionType, Arms, PouringSide
 from coraplex.robot_plans import (
     MoveMotion,
     MoveToolCenterPointMotion,
