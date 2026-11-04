@@ -4,8 +4,16 @@ import abc
 from collections import deque
 from dataclasses import dataclass, field
 from functools import lru_cache
-from typing import Generic, Any, Optional, Type, _GenericAlias, TypeVar
-from typing_extensions import get_origin, get_args, Dict, TYPE_CHECKING
+from typing import _GenericAlias
+from typing_extensions import (
+    get_origin,
+    get_args,
+    Dict,
+    TYPE_CHECKING,
+    Generic,
+    Any,
+    TypeVar,
+)
 
 from krrood.ormatic.exceptions import NoGenericError
 
@@ -62,7 +70,7 @@ class DataAccessObjectState(Generic[WorkItemT], abc.ABC):
         """
         return id(source) in self.memo
 
-    def get(self, source: Any) -> Optional[Any]:
+    def get(self, source: Any) -> Any | None:
         """
         Get the converted object for the given source object.
 
@@ -80,7 +88,7 @@ class DataAccessObjectState(Generic[WorkItemT], abc.ABC):
         """
         self.memo[id(source)] = target
 
-    def pop(self, source: Any) -> Optional[Any]:
+    def pop(self, source: Any) -> Any | None:
         """
         Remove and return the conversion result for the given source object.
 
@@ -116,8 +124,10 @@ class HasGeneric(Generic[T]):
     @lru_cache(maxsize=None)
     def constructable_original_class(cls) -> T:
         """
-        Return the constructable original class. Use this for object allocation in from_dao cycles, as Generic Aliases
-        cannot be constructed directly.
+        Return the constructable original class.
+
+        Use this for object allocation in from_dao cycles, as Generic Aliases cannot be
+        constructed directly.
         """
         original_class = cls.original_class()
         if type(original_class) is _GenericAlias:
@@ -126,7 +136,7 @@ class HasGeneric(Generic[T]):
             return original_class
 
     @classmethod
-    def _dao_like_argument(cls) -> Optional[Type]:
+    def _dao_like_argument(cls) -> type | None:
         """
         Extract the generic argument from the class hierarchy.
 

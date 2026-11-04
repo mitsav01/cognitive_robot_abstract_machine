@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from dataclasses import fields as dc_fields
-from typing_extensions import List, Type
 
 from krrood.class_diagrams.attribute_introspector import (
     AttributeIntrospector,
@@ -13,14 +12,15 @@ from krrood.class_diagrams.attribute_introspector import (
 
 @dataclass
 class DescriptorAwareIntrospector(AttributeIntrospector):
-    """Discover dataclass fields plus EQL descriptor-backed attributes.
+    """
+    Discover dataclass fields plus EQL descriptor-backed attributes.
 
     Public attributes that implement the descriptor protocol (`__get__` and `__set__`)
-    and expose an `attr_name` are mapped to their hidden backing dataclass field,
-    but are presented under the public attribute name.
+    and expose an `attr_name` are mapped to their hidden backing dataclass field, but
+    are presented under the public attribute name.
     """
 
-    def discover(self, owner_cls: Type) -> List[DiscoveredAttribute]:
+    def discover(self, owner_cls: type) -> list[DiscoveredAttribute]:
         from krrood.ontomatic.property_descriptor.property_descriptor import (
             PropertyDescriptor,
         )

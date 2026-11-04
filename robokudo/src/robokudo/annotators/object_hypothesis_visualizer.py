@@ -5,6 +5,7 @@ This module provides an annotator for visualizing object hypotheses in both
 """
 
 from __future__ import annotations
+
 import copy
 from pathlib import Path
 from timeit import default_timer
@@ -13,29 +14,29 @@ import cv2
 import open3d as o3d
 import trimesh
 from py_trees.common import Status
-from typing_extensions import TYPE_CHECKING, Tuple, Dict, List
+from semantic_digital_twin.world_description.geometry import Mesh
+from semantic_digital_twin.world_description.world_entity import Body
+from typing_extensions import TYPE_CHECKING
 
 from robokudo.annotators.core import BaseAnnotator
 from robokudo.cas import CASViews
 from robokudo.types.annotation import (
-    Classification,
     BoundingBox3DAnnotation,
+    Classification,
     PoseAnnotation,
 )
 from robokudo.types.scene import ObjectHypothesis
 from robokudo.utils.annotator_helper import draw_bounding_boxes_from_object_hypotheses
 from robokudo.utils.error_handling import catch_and_raise_to_blackboard
 from robokudo.utils.o3d_helper import (
-    trimesh_to_o3d_mesh,
-    draw_wireframe_of_obb_into_image,
     draw_mesh_wireframe_on_image,
+    draw_bounding_box_wireframe,
+    trimesh_to_o3d_mesh,
 )
 from robokudo.utils.type_conversion import (
     get_o3d_obb_from_bounding_box_annotation,
     get_transform_matrix_from_pose_annotation,
 )
-from semantic_digital_twin.world_description.geometry import FileMesh, Mesh
-from semantic_digital_twin.world_description.world_entity import Body
 
 if TYPE_CHECKING:
     import numpy as np
@@ -71,28 +72,29 @@ class ObjectHypothesisVisualizer(BaseAnnotator):
     def __init__(
         self,
         name: str = "ObjectHypothesisVisualizer",
-        descriptor: "ObjectHypothesisVisualizer.Descriptor" = Descriptor(),
+        descriptor: ObjectHypothesisVisualizer.Descriptor | None = None,
     ) -> None:
         """Initialize the object hypothesis visualizer.
 
-        :param name: Name of the annotator instance, defaults to "ObjectHypothesisVisualizer"
-        :param descriptor: Configuration descriptor, defaults to Descriptor()
+        :param name: Name of the annotator instance
+        :param descriptor: Configuration descriptor
         """
         super().__init__(name, descriptor)
         self.rk_logger.debug("%s.__init__()" % self.__class__.__name__)
-        self._mesh_cache: Dict[Tuple[object, ...], o3d.geometry.TriangleMesh] = {}
+        self._mesh_cache: dict[tuple[object, ...], o3d.geometry.TriangleMesh] = {}
 
-    def _iter_mesh_visuals(self, body: Body) -> List[Mesh]:
+    def _iter_mesh_visuals(self, body: Body) -> list[Mesh]:
         """Return mesh-based visual shapes for a body."""
         return [shape for shape in body.visual if isinstance(shape, Mesh)]
 
-    def _mesh_cache_key(self, shape: Mesh) -> Tuple[object, ...]:
+    def _mesh_cache_key(self, shape: Mesh) -> tuple[object, ...]:
         """Create a stable cache key for mesh conversion results."""
-        if isinstance(shape, FileMesh):
+        filename = shape.filename
+        if filename:
             try:
-                filename = str(Path(shape.filename).resolve())
+                filename = str(Path(filename).resolve())
             except OSError:
-                filename = shape.filename
+                pass
             return ("filemesh", filename)
         return ("mesh", id(shape.mesh))
 
@@ -110,19 +112,19 @@ class ObjectHypothesisVisualizer(BaseAnnotator):
         self,
         image: npt.NDArray[np.uint8],
         text: str,
-        color: Tuple[int, int, int] = (0, 0, 255),
+        color: tuple[int, int, int] = (0, 0, 255),
         font: int = cv2.FONT_HERSHEY_SIMPLEX,
         font_scale: float = 1.0,
         thickness: int = 2,
-    ):
+    ) -> None:
         """Draw text in the middle of an image.
 
         :param image: Image to draw on
         :param text: Text to draw
         :param color: BGR color tuple
-        :param font: OpenCV font type, defaults to cv2.FONT_HERSHEY_SIMPLEX
-        :param font_scale: Font scale factor, defaults to 1
-        :param thickness: Line thickness, defaults to 2
+        :param font: OpenCV font type
+        :param font_scale: Font scale factor
+        :param thickness: Line thickness
         """
         # Get the size of the text
         text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
@@ -211,7 +213,7 @@ class ObjectHypothesisVisualizer(BaseAnnotator):
             for bb_annotation in bb_annotations:
                 obb = get_o3d_obb_from_bounding_box_annotation(bb_annotation)
                 visualized_geometries.append(obb)
-                draw_wireframe_of_obb_into_image(self.get_cas(), visualization_img, obb)
+                draw_bounding_box_wireframe(self.get_cas(), visualization_img, obb)
 
             pose_annotations = self.get_cas().filter_by_type(
                 type_to_include=PoseAnnotation,

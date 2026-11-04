@@ -1,8 +1,8 @@
 """
 Comparators for the Entity Query Language.
 
-This module provides binary comparison operators that evaluate relationships between symbolic expressions,
-including equality, ordering, and membership-style checks.
+This module provides binary comparison operators that evaluate relationships between
+symbolic expressions, including equality, ordering, and membership-style checks.
 """
 
 from __future__ import annotations
@@ -11,16 +11,7 @@ import operator
 from copy import copy
 from dataclasses import dataclass
 
-from typing_extensions import (
-    Callable,
-    Any,
-    ClassVar,
-    Dict,
-    Optional,
-    Tuple,
-    Iterable,
-    TYPE_CHECKING,
-)
+from typing_extensions import Callable, Any, ClassVar, Iterable
 
 from krrood.entity_query_language.core.base_expressions import (
     OperationResult,
@@ -37,13 +28,14 @@ from krrood.entity_query_language.utils import is_iterable, make_set
 @dataclass(eq=False, repr=False)
 class Comparator(BinaryExpression, PerformsCartesianProduct):
     """
-    A symbolic equality check that can be used to compare symbolic variables using a provided comparison operation.
+    A symbolic equality check that can be used to compare symbolic variables using a
+    provided comparison operation.
     """
 
     left: Selectable
     right: Selectable
     operation: Callable[[Any, Any], bool]
-    operation_name_map: ClassVar[Dict[Any, str]] = {
+    operation_name_map: ClassVar[dict[Any, str]] = {
         operator.eq: "==",
         operator.ne: "!=",
         operator.lt: "<",
@@ -53,7 +45,7 @@ class Comparator(BinaryExpression, PerformsCartesianProduct):
     }
 
     @property
-    def _product_operands_(self) -> Tuple[SymbolicExpression, ...]:
+    def _product_operands_(self) -> tuple[SymbolicExpression, ...]:
         return self.left, self.right
 
     @property
@@ -69,7 +61,6 @@ class Comparator(BinaryExpression, PerformsCartesianProduct):
         """
         Compares the left and right symbolic variables using the "operation".
         """
-
         yield from (
             self.get_operation_result(result)
             for result in self._evaluate_product_(sources)
@@ -79,7 +70,8 @@ class Comparator(BinaryExpression, PerformsCartesianProduct):
         """
         Evaluate the comparator operation and return the result.
 
-        :param child_result: The current result that has the values for the first and second operands.
+        :param child_result: The current result that has the values for the first and
+            second operands.
         :return: The result of the operation.
         """
         left_value, right_value = (
@@ -93,22 +85,21 @@ class Comparator(BinaryExpression, PerformsCartesianProduct):
         ):
             left_value = make_set(left_value)
             right_value = make_set(right_value)
-        res = self.operation(left_value, right_value)
-        is_false = not res
+        comparison_result = self.operation(left_value, right_value)
         bindings = copy(child_result.bindings)
-        bindings[self._id_] = res
-        return OperationResult(bindings, is_false, self, child_result)
+        bindings[self._id_] = comparison_result
+        return OperationResult(
+            bindings, operand=self, previous_operation_result=child_result
+        )
 
     def _optimize_operands_order_(
-        self, sources: Optional[OperationResult]
-    ) -> Tuple[SymbolicExpression, SymbolicExpression]:
-        from krrood.entity_query_language.query.quantifiers import The
-
-        left_has_the = any(isinstance(desc, The) for desc in self.left._descendants_)
-        right_has_the = any(isinstance(desc, The) for desc in self.right._descendants_)
-        if left_has_the and not right_has_the:
+        self, sources: OperationResult | None
+    ) -> tuple[SymbolicExpression, SymbolicExpression]:
+        left_is_definite = self._operand_contains_definite_query_(self.left)
+        right_is_definite = self._operand_contains_definite_query_(self.right)
+        if left_is_definite and not right_is_definite:
             return self.left, self.right
-        elif not left_has_the and right_has_the:
+        if right_is_definite and not left_is_definite:
             return self.right, self.left
         if sources is not None and any(
             v._id_ in sources.bindings for v in self.right._unique_variables_
@@ -116,6 +107,22 @@ class Comparator(BinaryExpression, PerformsCartesianProduct):
             return self.right, self.left
         else:
             return self.left, self.right
+
+    @staticmethod
+    def _operand_contains_definite_query_(operand: SymbolicExpression) -> bool:
+        """
+        :param operand: A comparator operand.
+        :return: Whether the operand is, or contains, a definite (``the``) query, which yields a
+            single result and is worth evaluating first.
+        """
+        from krrood.entity_query_language.query.query import Query
+        from krrood.entity_query_language.query.quantifiers import The
+
+        return any(
+            isinstance(expression, Query)
+            and issubclass(expression._quantifier_builder_.type, The)
+            for expression in (operand, *operand._descendants_)
+        )
 
 
 def not_contains(container, item) -> bool:

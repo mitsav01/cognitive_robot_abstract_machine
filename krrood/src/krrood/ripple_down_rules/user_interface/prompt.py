@@ -1,29 +1,20 @@
 import ast
 import logging
-import sys
 from _ast import AST
 
 from krrood.ripple_down_rules import logger
-
-try:
-    from PyQt6.QtWidgets import QApplication
-    from .gui import RDRCaseViewer, style
-except ImportError:
-    QApplication = None
-    RDRCaseViewer = None
 
 from colorama import Fore, Style
 from pygments import highlight
 from pygments.formatters.terminal import TerminalFormatter
 from pygments.lexers.python import PythonLexer
-from typing_extensions import Optional, Tuple
 
 from krrood.ripple_down_rules.datastructures.callable_expression import (
     CallableExpression,
     parse_string_to_expression,
 )
 from krrood.ripple_down_rules.datastructures.dataclasses import CaseQuery
-from krrood.ripple_down_rules.datastructures.enums import PromptFor, ExitStatus
+from krrood.ripple_down_rules.datastructures.enums import PromptFor
 from krrood.ripple_down_rules.user_interface.ipython_custom_shell import IPythonShell
 from krrood.ripple_down_rules.utils import make_list
 from threading import Lock
@@ -42,31 +33,27 @@ class UserPrompt:
         """
         Initialize the UserPrompt class.
         """
-        self.viewer = (
-            RDRCaseViewer.instances[0]
-            if RDRCaseViewer and any(RDRCaseViewer.instances)
-            else None
-        )
-        self.print_func = self.viewer.print if self.viewer else print
+        self.print_func = print
 
     def prompt_user_for_expression(
         self,
         case_query: CaseQuery,
         prompt_for: PromptFor,
-        prompt_str: Optional[str] = None,
-    ) -> Tuple[Optional[str], Optional[CallableExpression]]:
+        prompt_str: str | None = None,
+    ) -> tuple[str | None, CallableExpression | None]:
         """
         Prompt the user for an executable python expression to the given case query.
 
         :param case_query: The case query to prompt the user for.
         :param prompt_for: The type of information ask user about.
         :param prompt_str: The prompt string to display to the user.
-        :return: A callable expression that takes a case and executes user expression on it.
+        :return: A callable expression that takes a case and executes user expression on
+            it.
         """
         with self.shell_lock:
-            prev_user_input: Optional[str] = None
-            user_input_to_modify: Optional[str] = None
-            callable_expression: Optional[CallableExpression] = None
+            prev_user_input: str | None = None
+            user_input_to_modify: str | None = None
+            callable_expression: CallableExpression | None = None
             while True:
                 user_input, expression_tree = self.prompt_user_about_case(
                     case_query, prompt_for, prompt_str, code_to_modify=prev_user_input
@@ -121,17 +108,20 @@ class UserPrompt:
         self,
         case_query: CaseQuery,
         prompt_for: PromptFor,
-        prompt_str: Optional[str] = None,
-        code_to_modify: Optional[str] = None,
-    ) -> Tuple[Optional[str], Optional[AST]]:
+        prompt_str: str | None = None,
+        code_to_modify: str | None = None,
+    ) -> tuple[str | None, AST | None]:
         """
         Prompt the user for input.
 
         :param case_query: The case query to prompt the user for.
-        :param prompt_for: The type of information the user should provide for the given case.
+        :param prompt_for: The type of information the user should provide for the given
+            case.
         :param prompt_str: The prompt string to display to the user.
-        :param code_to_modify: The code to modify. If given will be used as a start for user to modify.
-        :return: The user input, and the executable expression that was parsed from the user input.
+        :param code_to_modify: The code to modify. If given will be used as a start for
+            user to modify.
+        :return: The user input, and the executable expression that was parsed from the
+            user input.
         """
         logger.debug("Entered shell")
         initial_prompt_str = f"{prompt_str}\n" if prompt_str is not None else ""
@@ -140,31 +130,18 @@ class UserPrompt:
         else:
             prompt_for_str = f"Give conditions for:"
         case_query.scope.update({"case": case_query.case})
-        shell = None
 
-        if self.viewer is None:
-            prompt_for_str = prompt_for_str.replace(":", f" {case_query.name}:")
-            prompt_str = (
-                f"{Fore.WHITE}{initial_prompt_str}{Fore.MAGENTA}{prompt_for_str}"
-            )
-            prompt_str = self.construct_prompt_str_for_shell(
-                case_query, prompt_for, prompt_str
-            )
-            shell = IPythonShell(
-                header=prompt_str,
-                prompt_for=prompt_for,
-                case_query=case_query,
-                code_to_modify=code_to_modify,
-            )
-        else:
-            prompt_str = case_query.current_value_str
-            self.viewer.update_for_case_query(
-                case_query,
-                prompt_for=prompt_for,
-                code_to_modify=code_to_modify,
-                title=prompt_for_str,
-                prompt_str=prompt_str,
-            )
+        prompt_for_str = prompt_for_str.replace(":", f" {case_query.name}:")
+        prompt_str = f"{Fore.WHITE}{initial_prompt_str}{Fore.MAGENTA}{prompt_for_str}"
+        prompt_str = self.construct_prompt_str_for_shell(
+            case_query, prompt_for, prompt_str
+        )
+        shell = IPythonShell(
+            header=prompt_str,
+            prompt_for=prompt_for,
+            case_query=case_query,
+            code_to_modify=code_to_modify,
+        )
         user_input, expression_tree = self.prompt_user_input_and_parse_to_expression(
             shell=shell
         )
@@ -175,7 +152,7 @@ class UserPrompt:
         self,
         case_query: CaseQuery,
         prompt_for: PromptFor,
-        initial_prompt_str: Optional[str] = None,
+        initial_prompt_str: str | None = None,
     ) -> str:
         initial_prompt_str = (
             f"{initial_prompt_str}\n" if initial_prompt_str is not None else ""
@@ -193,13 +170,14 @@ class UserPrompt:
         self,
         case_query: CaseQuery,
         prompt_for: PromptFor,
-        prompt_str: Optional[str] = None,
+        prompt_str: str | None = None,
     ) -> str:
         """
         Construct the prompt string for the shell.
 
         :param case_query: The case query to prompt the user for.
-        :param prompt_for: The type of information the user should provide for the given case.
+        :param prompt_for: The type of information the user should provide for the given
+            case.
         :param prompt_str: The prompt string to display to the user.
         """
         prompt_str += "\n" + case_query.current_value_str
@@ -215,13 +193,14 @@ class UserPrompt:
         return prompt_str
 
     def prompt_user_input_and_parse_to_expression(
-        self, shell: Optional[IPythonShell] = None, user_input: Optional[str] = None
-    ) -> Tuple[Optional[str], Optional[ast.AST]]:
+        self, shell: IPythonShell | None = None, user_input: str | None = None
+    ) -> tuple[str | None, ast.AST | None]:
         """
         Prompt the user for input.
 
         :param shell: The Ipython shell to use for prompting the user.
-        :param user_input: The user input to use. If given, the user input will be used instead of prompting the user.
+        :param user_input: The user input to use. If given, the user input will be used
+            instead of prompting the user.
         :return: The user input and the AST tree.
         """
         while True:
@@ -246,29 +225,17 @@ class UserPrompt:
                 user_input = None
 
     def start_shell_and_get_user_input(
-        self, shell: Optional[IPythonShell] = None
-    ) -> Optional[str]:
+        self, shell: IPythonShell | None = None
+    ) -> str | None:
         """
         Start the shell and get user input.
 
         :param shell: The Ipython shell to use for prompting the user.
         :return: The user input.
         """
-        if self.viewer is None:
-            shell = IPythonShell() if shell is None else shell
-            if not hasattr(shell.shell, "auto_match"):
-                shell.shell.auto_match = True  # or True, depending on your preference
-            shell.run()
-            user_input = shell.user_input
-        else:
-            app = QApplication.instance()
-            if app is None:
-                raise RuntimeError(
-                    "QApplication instance is None. Please run the application first."
-                )
-            self.viewer.show()
-            app.exec()
-            if self.viewer.exit_status == ExitStatus.CLOSE:
-                sys.exit()
-            user_input = self.viewer.user_input
+        shell = IPythonShell() if shell is None else shell
+        if not hasattr(shell.shell, "auto_match"):
+            shell.shell.auto_match = True  # or True, depending on your preference
+        shell.run()
+        user_input = shell.user_input
         return user_input

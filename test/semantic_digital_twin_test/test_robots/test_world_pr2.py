@@ -2,19 +2,20 @@ from collections import defaultdict
 
 import numpy as np
 import pytest
-from typing_extensions import List
 
 from semantic_digital_twin.adapters.urdf import URDFParser
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 from semantic_digital_twin.exceptions import (
     DuplicateRobotAssignmentsError,
-    BrokenWorldModificationHistoryError,
+    PartiallyAppliedWorldModificationError,
 )
 from semantic_digital_twin.orm.ormatic_interface import *  # noqa
 from semantic_digital_twin.reasoning.predicates import LeftOf
 from semantic_digital_twin.robots.hsrb import HSRB
 from semantic_digital_twin.robots.pr2 import (
     PR2,
+    PR2BaseLidar,
+    PR2Joint,
     PR2MobileBase,
     PR2Torso,
     PR2Neck,
@@ -29,15 +30,14 @@ from semantic_digital_twin.robots.pr2 import (
     PR2KinectV1,
 )
 from semantic_digital_twin.robots.robot_parts import KinematicChain
+from semantic_digital_twin.robots.stretch import Stretch
 from semantic_digital_twin.robots.tracy import Tracy
 from semantic_digital_twin.spatial_computations.ik_solver import (
     MaxIterationsException,
     UnreachableException,
 )
-from semantic_digital_twin.spatial_types.derivatives import Derivatives
-from semantic_digital_twin.spatial_types.spatial_types import (
-    HomogeneousTransformationMatrix,
-)
+from semantic_digital_twin.world_description.derivatives import Derivatives
+from krrood_spatial_math.spatial_types import HomogeneousTransformationMatrix
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import (
     OmniDrive,
@@ -90,16 +90,16 @@ def test_compute_chain_of_connections_pr2(pr2_world_state_reset):
     real = [x.name for x in real]
     assert real == [
         PrefixedName(name="base_footprint_joint", prefix="pr2"),
-        PrefixedName(name="torso_lift_joint", prefix="pr2"),
-        PrefixedName(name="r_shoulder_pan_joint", prefix="pr2"),
-        PrefixedName(name="r_shoulder_lift_joint", prefix="pr2"),
-        PrefixedName(name="r_upper_arm_roll_joint", prefix="pr2"),
+        PrefixedName(name=PR2Joint.TORSO_LIFT, prefix="pr2"),
+        PrefixedName(name=PR2Joint.RIGHT_SHOULDER_PAN, prefix="pr2"),
+        PrefixedName(name=PR2Joint.RIGHT_SHOULDER_LIFT, prefix="pr2"),
+        PrefixedName(name=PR2Joint.RIGHT_UPPER_ARM_ROLL, prefix="pr2"),
         PrefixedName(name="r_upper_arm_joint", prefix="pr2"),
-        PrefixedName(name="r_elbow_flex_joint", prefix="pr2"),
-        PrefixedName(name="r_forearm_roll_joint", prefix="pr2"),
+        PrefixedName(name=PR2Joint.RIGHT_ELBOW_FLEX, prefix="pr2"),
+        PrefixedName(name=PR2Joint.RIGHT_FOREARM_ROLL, prefix="pr2"),
         PrefixedName(name="r_forearm_joint", prefix="pr2"),
-        PrefixedName(name="r_wrist_flex_joint", prefix="pr2"),
-        PrefixedName(name="r_wrist_roll_joint", prefix="pr2"),
+        PrefixedName(name=PR2Joint.RIGHT_WRIST_FLEX, prefix="pr2"),
+        PrefixedName(name=PR2Joint.RIGHT_WRIST_ROLL, prefix="pr2"),
         PrefixedName(name="r_gripper_palm_joint", prefix="pr2"),
         PrefixedName(name="r_gripper_tool_joint", prefix="pr2"),
     ]
@@ -110,8 +110,9 @@ def test_duplicate_robot_assignments_error_pr2(pr2_world_state_reset):
     assert pr2 is not None, "PR2 robot not found in world state reset"
 
     # Create another robot
-    with pytest.raises(BrokenWorldModificationHistoryError):
+    with pytest.raises(PartiallyAppliedWorldModificationError) as error_info:
         pr2_2 = PR2.from_world(pr2_world_state_reset)
+    assert isinstance(error_info.value.cause, DuplicateRobotAssignmentsError)
 
 
 def test_compute_chain_of_connections_error_pr2(pr2_world_state_reset):
@@ -387,7 +388,7 @@ def test_search_for_connections_of_type(pr2_world_state_reset: World):
 
     connections = pr2_world_state_reset.get_connections_by_type(PrismaticConnection)
     assert len(connections) == 5
-    assert connections[0].name == PrefixedName(name="torso_lift_joint", prefix="pr2")
+    assert connections[0].name == PrefixedName(name=PR2Joint.TORSO_LIFT, prefix="pr2")
     assert connections[
         0
     ].parent == pr2_world_state_reset.get_kinematic_structure_entity_by_name(
@@ -433,14 +434,15 @@ def test_pr2_semantic_annotation(pr2_world_state_reset):
     # Ensure there are no loose bodies
     pr2_world_state_reset._notify_model_change()
 
-    assert len(pr2.get_end_effectors()) == 2
-    assert len(pr2.get_arms()) == 2
-    assert len(pr2.get_sensors()) == 1
+    assert len(pr2.all_end_effectors) == 2
+    assert len(pr2.all_arms) == 2
+    assert len(pr2.all_sensors) == 2
     assert pr2.torso.name.name == "PR2Torso"
     assert len(pr2.torso.neck.sensors) == 1
     assert pr2.left_arm and pr2.right_arm
     assert pr2.left_arm != pr2.right_arm
-    assert pr2.get_sensors()[0] == pr2.get_default_camera()
+    assert pr2.get_default_camera() in pr2.all_sensors
+    assert pr2.mobile_base.lidar in pr2.all_sensors
 
 
 def test_has_left_right_arm_mixin(pr2_world_state_reset):
@@ -454,8 +456,29 @@ def test_has_left_right_arm_mixin(pr2_world_state_reset):
     )()
 
 
+def test_an_arm_covers_the_chain_down_to_its_end_effector(pr2_world_state_reset):
+    """
+    Whatever carries the end effector -- a wrist mounted force torque sensor, say --
+    belongs to the arm holding it.
+
+    An arm's tip stops where its joints do, so a body mounted past it belongs to no part
+    of the robot at all, and anything written for the arm or for its end effector passes
+    it by.
+    """
+    pr2 = pr2_world_state_reset.get_semantic_annotations_by_type(PR2)[0]
+
+    for arm in (pr2.left_arm, pr2.right_arm):
+        carrying_chain = (
+            pr2_world_state_reset.compute_chain_of_kinematic_structure_entities(
+                arm.root, arm.end_effector.root
+            )
+        )
+
+        assert set(carrying_chain) <= set(arm.kinematic_structure_entities)
+
+
 def test_kinematic_chains(pr2_world_state_reset):
-    semantic_kinematic_chain_annotation: List[KinematicChain] = (
+    semantic_kinematic_chain_annotation: list[KinematicChain] = (
         pr2_world_state_reset.get_semantic_annotations_by_type(KinematicChain)
     )
     for chain in semantic_kinematic_chain_annotation:
@@ -468,18 +491,18 @@ def test_tracy_semantic_annotation(tracy_world):
 
     tracy_world._notify_model_change()
 
-    assert len(tracy.get_end_effectors()) == 2
-    assert len(tracy.get_sensors()) == 1
+    assert len(tracy.all_end_effectors) == 2
+    assert len(tracy.all_sensors) == 1
 
 
 def test_hsrb_semantic_annotation(_hsr_world_setup):
     hsrb = _hsr_world_setup.get_semantic_annotations_by_type(HSRB)[0]
     _hsr_world_setup._notify_model_change()
 
-    assert len(hsrb.get_end_effectors()) == 1
-    assert len(hsrb.get_arms()) == 1
+    assert len(hsrb.all_end_effectors) == 1
+    assert len(hsrb.all_arms) == 1
 
-    assert len(hsrb.get_sensors()) == 5
+    assert len(hsrb.all_sensors) == 6
     assert hsrb.mobile_base.torso is not None
 
 
@@ -491,28 +514,31 @@ def test_pr2_tighten_dof_velocity_limits_of_1dof_connections(pr2_world_state_res
 
     # try spacial case for specific joint
     new_limits = defaultdict(
-        lambda: 0.5, {pr2._world.get_connection_by_name("head_pan_joint"): 23}
+        lambda: 0.5, {pr2._world.get_connection_by_name(PR2Joint.HEAD_PAN): 23}
     )
     pr2.tighten_dof_velocity_limits_of_1dof_connections(new_limits)
     # if spacial case triggers, but the new limit is above the old one, nothing happens
     assert (
-        pr2._world.get_connection_by_name("head_pan_joint").dof.limits.upper.velocity
+        pr2._world.get_connection_by_name(PR2Joint.HEAD_PAN).dof.limits.upper.velocity
         == 1
     )
     # new limit is applied to joint without spacial case
     assert (
-        pr2._world.get_connection_by_name("head_tilt_joint").dof.limits.upper.velocity
+        pr2._world.get_connection_by_name(PR2Joint.HEAD_TILT).dof.limits.upper.velocity
         == 0.5
     )
     # non-spacial case where the old limit is below 1
     assert (
-        pr2._world.get_connection_by_name("torso_lift_joint").dof.limits.upper.velocity
+        pr2._world.get_connection_by_name(PR2Joint.TORSO_LIFT).dof.limits.upper.velocity
         == 0.013
     )
 
 
 def test_pr2_tighten_dof_velocity_limits_proportionally(pr2_world_state_reset):
-    """All limits scale by the same factor; the joint with the highest limit reaches maximum_velocity."""
+    """
+    All limits scale by the same factor; the joint with the highest limit reaches
+    maximum_velocity.
+    """
     pr2 = pr2_world_state_reset.get_semantic_annotations_by_type(PR2)[0]
 
     connections_with_limits = [
@@ -535,7 +561,10 @@ def test_pr2_tighten_dof_velocity_limits_proportionally(pr2_world_state_reset):
 def test_pr2_tighten_dof_velocity_limits_proportionally_preserves_ratios(
     pr2_world_state_reset,
 ):
-    """The ratio between any two joints with different limits is identical before and after scaling."""
+    """
+    The ratio between any two joints with different limits is identical before and after
+    scaling.
+    """
     pr2 = pr2_world_state_reset.get_semantic_annotations_by_type(PR2)[0]
 
     initial_limits = {
@@ -570,7 +599,9 @@ def test_pr2_tighten_dof_velocity_limits_proportionally_preserves_ratios(
 def test_pr2_tighten_dof_velocity_limits_proportionally_no_op_when_within_bounds(
     pr2_world_state_reset,
 ):
-    """When maximum_velocity is at or above the current maximum, no limits are changed."""
+    """
+    When maximum_velocity is at or above the current maximum, no limits are changed.
+    """
     pr2 = pr2_world_state_reset.get_semantic_annotations_by_type(PR2)[0]
 
     initial_limits = {
@@ -604,33 +635,33 @@ def test_split_chain_of_connections(pr2_world_state_reset):
     result1_names = [c.name for c in result[0]]
     result2_names = [c.name for c in result[1]]
     chain1 = [
-        PrefixedName(name="r_gripper_r_finger_joint", prefix="pr2"),
+        PrefixedName(name=PR2Joint.RIGHT_GRIPPER_RIGHT_FINGER, prefix="pr2"),
         PrefixedName(name="r_gripper_palm_joint", prefix="pr2"),
-        PrefixedName(name="r_wrist_roll_joint", prefix="pr2"),
-        PrefixedName(name="r_wrist_flex_joint", prefix="pr2"),
+        PrefixedName(name=PR2Joint.RIGHT_WRIST_ROLL, prefix="pr2"),
+        PrefixedName(name=PR2Joint.RIGHT_WRIST_FLEX, prefix="pr2"),
         PrefixedName(name="r_forearm_joint", prefix="pr2"),
-        PrefixedName(name="r_forearm_roll_joint", prefix="pr2"),
-        PrefixedName(name="r_elbow_flex_joint", prefix="pr2"),
+        PrefixedName(name=PR2Joint.RIGHT_FOREARM_ROLL, prefix="pr2"),
+        PrefixedName(name=PR2Joint.RIGHT_ELBOW_FLEX, prefix="pr2"),
         PrefixedName(name="r_upper_arm_joint", prefix="pr2"),
-        PrefixedName(name="r_upper_arm_roll_joint", prefix="pr2"),
-        PrefixedName(name="r_shoulder_lift_joint", prefix="pr2"),
-        PrefixedName(name="r_shoulder_pan_joint", prefix="pr2"),
+        PrefixedName(name=PR2Joint.RIGHT_UPPER_ARM_ROLL, prefix="pr2"),
+        PrefixedName(name=PR2Joint.RIGHT_SHOULDER_LIFT, prefix="pr2"),
+        PrefixedName(name=PR2Joint.RIGHT_SHOULDER_PAN, prefix="pr2"),
     ]
 
     chain2 = [
-        PrefixedName(name="l_shoulder_pan_joint", prefix="pr2"),
-        PrefixedName(name="l_shoulder_lift_joint", prefix="pr2"),
-        PrefixedName(name="l_upper_arm_roll_joint", prefix="pr2"),
+        PrefixedName(name=PR2Joint.LEFT_SHOULDER_PAN, prefix="pr2"),
+        PrefixedName(name=PR2Joint.LEFT_SHOULDER_LIFT, prefix="pr2"),
+        PrefixedName(name=PR2Joint.LEFT_UPPER_ARM_ROLL, prefix="pr2"),
         PrefixedName(name="l_upper_arm_joint", prefix="pr2"),
-        PrefixedName(name="l_elbow_flex_joint", prefix="pr2"),
-        PrefixedName(name="l_forearm_roll_joint", prefix="pr2"),
+        PrefixedName(name=PR2Joint.LEFT_ELBOW_FLEX, prefix="pr2"),
+        PrefixedName(name=PR2Joint.LEFT_FOREARM_ROLL, prefix="pr2"),
         PrefixedName(name="l_forearm_joint", prefix="pr2"),
-        PrefixedName(name="l_wrist_flex_joint", prefix="pr2"),
-        PrefixedName(name="l_wrist_roll_joint", prefix="pr2"),
+        PrefixedName(name=PR2Joint.LEFT_WRIST_FLEX, prefix="pr2"),
+        PrefixedName(name=PR2Joint.LEFT_WRIST_ROLL, prefix="pr2"),
         PrefixedName(name="l_force_torque_adapter_joint", prefix="pr2"),
         PrefixedName(name="l_force_torque_joint", prefix="pr2"),
         PrefixedName(name="l_gripper_palm_joint", prefix="pr2"),
-        PrefixedName(name="l_gripper_l_finger_joint", prefix="pr2"),
+        PrefixedName(name=PR2Joint.LEFT_GRIPPER_LEFT_FINGER, prefix="pr2"),
     ]
     assert result1_names == chain1
     assert result2_names == chain2
@@ -639,15 +670,37 @@ def test_split_chain_of_connections(pr2_world_state_reset):
 def test_robots_and_validate(supported_abstract_robots):
     for abstract_robot in supported_abstract_robots:
         print(f"Testing robot: {abstract_robot.__name__}")
-        world = URDFParser.from_file(abstract_robot.get_ros_file_path()).parse()
+        world = URDFParser.from_file(abstract_robot.get_ros_file_path()).create_world()
         robot = abstract_robot.from_world(world)
         robot.validate()
 
 
+def test_kinematic_chain_approximate_length(pr2_world_state_reset):
+    # Retrieve the PR2 robot from the world
+    robot = pr2_world_state_reset.get_semantic_annotations_by_type(PR2)[0]
+
+    left_arm_length = robot.left_arm.approximate_length()
+
+    assert 1.0 < left_arm_length <= 1.1
+
+    right_arm_length = robot.right_arm.approximate_length()
+
+    assert 1.0 < right_arm_length <= 1.1
+
+
+def test_kinematic_chain_length_stretch(stretch_apartment_world):
+    robot = stretch_apartment_world.get_semantic_annotations_by_type(Stretch)[0]
+
+    arm_length = robot.all_arms[0].approximate_length()
+
+    assert arm_length < 1.3
+
+
 def test_pr2_automatic_setup_correctly(pr2_world_state_reset):
     """
-    Test that the PR2 instance correctly references all its parts in a consistent hierarchy,
-    including mobile base, torso, arms, grippers, fingers, and sensors.
+    Test that the PR2 instance correctly references all its parts in a consistent
+    hierarchy, including mobile base, torso, arms, grippers, fingers, and sensors.
+
     Verifies that all parts reachable via robot._robot_parts are also reachable via the
     intended semantic attributes and have correct back-references.
     """
@@ -657,12 +710,12 @@ def test_pr2_automatic_setup_correctly(pr2_world_state_reset):
     verified_parts = set()
 
     def verify_part(part, expected_type, parent_robot):
-        assert isinstance(
-            part, expected_type
-        ), f"Part {part} is not of expected type {expected_type}"
-        assert (
-            part._robot == parent_robot
-        ), f"Part {part} back-reference to robot is incorrect"
+        assert isinstance(part, expected_type), (
+            f"Part {part} is not of expected type {expected_type}"
+        )
+        assert part._robot == parent_robot, (
+            f"Part {part} back-reference to robot is incorrect"
+        )
         verified_parts.add(part)
         return part
 
@@ -673,27 +726,30 @@ def test_pr2_automatic_setup_correctly(pr2_world_state_reset):
     torso = verify_part(mobile_base.torso, PR2Torso, robot)
     assert robot.torso == torso, "PR2.torso property shortcut mismatch"
 
-    # 3. Torso -> Neck (via HasNeck mixin)
+    # 3. MobileBase -> Lidar (via HasLidar mixin)
+    verify_part(mobile_base.lidar, PR2BaseLidar, robot)
+
+    # 4. Torso -> Neck (via HasNeck mixin)
     neck = verify_part(torso.neck, PR2Neck, robot)
 
-    # 4. Neck -> Sensors (via HasSensors mixin)
+    # 5. Neck -> Sensors (via HasSensors mixin)
     assert len(neck.sensors) == 1, "Neck should have exactly one sensor"
     verify_part(neck.sensors[0], PR2KinectV1, robot)
 
-    # 5. Torso -> Arms (via HasLeftRightArm mixin)
+    # 6. Torso -> Arms (via HasLeftRightArm mixin)
     left_arm = verify_part(torso.left_arm, PR2LeftArm, robot)
     right_arm = verify_part(torso.right_arm, PR2RightArm, robot)
     assert robot.left_arm == left_arm, "PR2.left_arm property shortcut mismatch"
     assert robot.right_arm == right_arm, "PR2.right_arm property shortcut mismatch"
 
-    # 6. Arms -> EndEffectors (via HasEndEffector mixin)
+    # 7. Arms -> EndEffectors (via HasEndEffector mixin)
     left_gripper = verify_part(left_arm.end_effector, PR2LeftGripper, robot)
     right_gripper = verify_part(right_arm.end_effector, PR2RightGripper, robot)
 
-    # 7. Grippers -> Fingers (via HasTwoFingers -> HasFingers mixin)
-    assert (
-        len(left_gripper.fingers) == 2
-    ), "Left gripper should have exactly two fingers"
+    # 8. Grippers -> Fingers (via HasTwoFingers -> HasFingers mixin)
+    assert len(left_gripper.fingers) == 2, (
+        "Left gripper should have exactly two fingers"
+    )
     l_l_finger = next(
         f for f in left_gripper.fingers if isinstance(f, PR2LeftGripperLeftFinger)
     )
@@ -703,9 +759,9 @@ def test_pr2_automatic_setup_correctly(pr2_world_state_reset):
     verify_part(l_l_finger, PR2LeftGripperLeftFinger, robot)
     verify_part(l_r_finger, PR2LeftGripperRightFinger, robot)
 
-    assert (
-        len(right_gripper.fingers) == 2
-    ), "Right gripper should have exactly two fingers"
+    assert len(right_gripper.fingers) == 2, (
+        "Right gripper should have exactly two fingers"
+    )
     r_l_finger = next(
         f for f in right_gripper.fingers if isinstance(f, PR2RightGripperLeftFinger)
     )
@@ -715,26 +771,26 @@ def test_pr2_automatic_setup_correctly(pr2_world_state_reset):
     verify_part(r_l_finger, PR2RightGripperLeftFinger, robot)
     verify_part(r_r_finger, PR2RightGripperRightFinger, robot)
 
-    # 8. Final Coverage Verification
+    # 9. Final Coverage Verification
     # Ensure that all robot parts discovered via automated introspection (robot._robot_parts)
     # have been explicitly checked in this test.
     all_discovered_parts = set(robot._robot_parts)
 
     missing_from_hierarchy = all_discovered_parts - verified_parts
-    assert (
-        not missing_from_hierarchy
-    ), f"Some robot parts were discovered but not verified: {missing_from_hierarchy}"
+    assert not missing_from_hierarchy, (
+        f"Some robot parts were discovered but not verified: {missing_from_hierarchy}"
+    )
 
     extra_in_hierarchy = verified_parts - all_discovered_parts
-    assert (
-        not extra_in_hierarchy
-    ), f"Some verified parts were not in robot._robot_parts: {extra_in_hierarchy}"
+    assert not extra_in_hierarchy, (
+        f"Some verified parts were not in robot._robot_parts: {extra_in_hierarchy}"
+    )
 
 
 def test_pr2_degrees_of_freedom_with_hardware_interface(pr2_world_state_reset):
     """
-    Tests that the degrees_of_freedom_with_hardware_interface property
-    correctly identifies all controlled joints of the PR2 robot.
+    Tests that the degrees_of_freedom_with_hardware_interface property correctly
+    identifies all controlled joints of the PR2 robot.
     """
     robot = pr2_world_state_reset.get_semantic_annotations_by_type(PR2)[0]
     dofs = robot.degrees_of_freedom_with_hardware_interface
@@ -745,31 +801,43 @@ def test_pr2_degrees_of_freedom_with_hardware_interface(pr2_world_state_reset):
     # 1 DOF for the torso (lift)
     # Total = 17
     expected_dof_names = {
-        "l_shoulder_pan_joint",
-        "l_shoulder_lift_joint",
-        "l_upper_arm_roll_joint",
-        "l_elbow_flex_joint",
-        "l_forearm_roll_joint",
-        "l_wrist_flex_joint",
-        "l_wrist_roll_joint",
-        "r_shoulder_pan_joint",
-        "r_shoulder_lift_joint",
-        "r_upper_arm_roll_joint",
-        "r_elbow_flex_joint",
-        "r_forearm_roll_joint",
-        "r_wrist_flex_joint",
-        "r_wrist_roll_joint",
-        "torso_lift_joint",
-        "head_pan_joint",
-        "head_tilt_joint",
+        PR2Joint.LEFT_SHOULDER_PAN,
+        PR2Joint.LEFT_SHOULDER_LIFT,
+        PR2Joint.LEFT_UPPER_ARM_ROLL,
+        PR2Joint.LEFT_ELBOW_FLEX,
+        PR2Joint.LEFT_FOREARM_ROLL,
+        PR2Joint.LEFT_WRIST_FLEX,
+        PR2Joint.LEFT_WRIST_ROLL,
+        PR2Joint.RIGHT_SHOULDER_PAN,
+        PR2Joint.RIGHT_SHOULDER_LIFT,
+        PR2Joint.RIGHT_UPPER_ARM_ROLL,
+        PR2Joint.RIGHT_ELBOW_FLEX,
+        PR2Joint.RIGHT_FOREARM_ROLL,
+        PR2Joint.RIGHT_WRIST_FLEX,
+        PR2Joint.RIGHT_WRIST_ROLL,
+        PR2Joint.TORSO_LIFT,
+        PR2Joint.HEAD_PAN,
+        PR2Joint.HEAD_TILT,
     }
 
     actual_dof_names = {dof.name.name for dof in dofs}
 
-    assert (
-        len(dofs) == 17
-    ), f"Expected 17 DOFs with hardware interface, but got {len(dofs)}: {actual_dof_names}"
+    assert len(dofs) == 17, (
+        f"Expected 17 DOFs with hardware interface, but got {len(dofs)}: {actual_dof_names}"
+    )
 
-    assert (
-        actual_dof_names == expected_dof_names
-    ), f"Missing DOFs: {expected_dof_names - actual_dof_names}, Extra DOFs: {actual_dof_names - expected_dof_names}"
+    assert actual_dof_names == expected_dof_names, (
+        f"Missing DOFs: {expected_dof_names - actual_dof_names}, Extra DOFs: {actual_dof_names - expected_dof_names}"
+    )
+
+
+# %% joint name enum
+
+
+def test_pr2_joint_names_resolve_to_connections(pr2_world_state_reset):
+    resolved = {
+        joint: pr2_world_state_reset.get_connection_by_name(joint).name.name
+        for joint in PR2Joint
+    }
+
+    assert resolved == {joint: joint.value for joint in PR2Joint}

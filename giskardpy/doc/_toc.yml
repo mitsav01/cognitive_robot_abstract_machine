@@ -11,6 +11,11 @@ parts:
         - file: motion_statecharts
         - file: examples/basic_motion
         - file: examples/cartesian_goals
+    - file: robot_setup
+
+- caption: Debugging
+  chapters:
+    - file: debugging_guide
 
 - caption: References
   chapters:

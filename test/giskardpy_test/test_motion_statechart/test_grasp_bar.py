@@ -1,0 +1,55 @@
+import numpy as np
+
+from cramph.data_types import ObservationStateValues
+from giskardpy.motion_statechart.graph_node import EndMotion
+from cramph.statechart import Statechart
+from giskardpy.motion_statechart.tasks.grasp_bar import GraspBar
+from semantic_digital_twin.adapters.ros.visualization.viz_marker import (
+    VizMarkerPublisher,
+)
+from krrood_spatial_math.spatial_types import Point3, Vector3
+from semantic_digital_twin.world import World
+from giskardpy.motion_control import MotionControl
+from cramph.context import StatechartContext
+from cramph.executor import StatechartExecutor
+
+
+def test_grasp_bar(pr2_world_state_reset: World, rclpy_node):
+    VizMarkerPublisher(_world=pr2_world_state_reset, node=rclpy_node)
+    tip = pr2_world_state_reset.get_kinematic_structure_entity_by_name(
+        "r_gripper_tool_frame"
+    )
+    root = pr2_world_state_reset.get_kinematic_structure_entity_by_name("odom_combined")
+
+    bar_center = Point3(0.6, -0.3, 1.0, reference_frame=root)
+    bar_axis = Vector3.Z(reference_frame=root)
+    tip_grasp_axis = Vector3.X(reference_frame=tip)
+
+    executor = StatechartExecutor(
+        context=StatechartContext(world=pr2_world_state_reset),
+        extensions=[MotionControl()],
+    )
+    statechart = Statechart(context=executor.context)
+    grasp = GraspBar(
+        root_link=root,
+        tip_link=tip,
+        tip_grasp_axis=tip_grasp_axis,
+        bar_center=bar_center,
+        bar_axis=bar_axis,
+        bar_length=0.4,
+    )
+    statechart.add_node(grasp)
+    statechart.add_node(EndMotion.when_true(grasp))
+
+    executor.compile(statechart=statechart)
+    executor.tick_until_end()
+
+    assert grasp.observation_state == ObservationStateValues.TRUE
+
+    # Tip must end up within the bar segment and aligned with the bar axis.
+    root_P_tip = pr2_world_state_reset.transform(
+        target_frame=root, spatial_object=Point3(0, 0, 0, reference_frame=tip)
+    ).to_np()[:3]
+    bar_center_np = bar_center.to_np()[:3]
+    distance = np.linalg.norm(np.cross(root_P_tip - bar_center_np, [0, 0, 1]))
+    assert distance <= grasp.threshold + 1e-2

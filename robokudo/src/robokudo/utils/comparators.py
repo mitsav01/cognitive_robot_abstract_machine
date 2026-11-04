@@ -3,7 +3,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 from scipy.spatial.distance import euclidean
-from typing_extensions import TYPE_CHECKING, List, Any, Union, Iterable
+from typing_extensions import TYPE_CHECKING, Any, Iterable
 
 from robokudo.types.annotation import PositionAnnotation
 from robokudo.types.tf import Pose
@@ -11,13 +11,14 @@ from robokudo.utils.non_maxima_suppression import _iou
 
 if TYPE_CHECKING:
     import numpy.typing as npt
+
     from robokudo.types.annotation import (
         BoundingBox3DAnnotation,
         Classification,
         ColorHistogram,
         SemanticColor,
     )
-    from robokudo.types.cv import Rect, ImageROI
+    from robokudo.types.cv import ImageROI, Rect
 
 
 class FeatureComparator:
@@ -48,8 +49,8 @@ class TranslationComparator(FeatureComparator):
 
     def compute_similarity(
         self,
-        query_value: Union[Iterable[float], PositionAnnotation],
-        obj_value: Union[Iterable[float], PositionAnnotation],
+        query_value: Iterable[float] | PositionAnnotation,
+        obj_value: Iterable[float] | PositionAnnotation,
     ) -> float:
         """Computes similarity based on translation distance between query and object values.
 
@@ -76,8 +77,8 @@ class OrientationComparator(FeatureComparator):
 
     def compute_similarity(
         self,
-        query_value: Union[Iterable[float], npt.NDArray[np.float64]],
-        obj_value: Union[Iterable[float], npt.NDArray[np.float64]],
+        query_value: Iterable[float] | npt.NDArray[np.float64],
+        obj_value: Iterable[float] | npt.NDArray[np.float64],
     ) -> float:
         """Computes similarity of both orientation quaternions by dot product.
 
@@ -119,7 +120,7 @@ class BboxComparator(FeatureComparator):
 class SizeComparator(FeatureComparator):
     """Extended FeatureComparator that computes similarity based on the sum difference between query and object values."""
 
-    def compute_similarity(self, query_value: List, obj_value: List) -> float:
+    def compute_similarity(self, query_value: list, obj_value: list) -> float:
         """Computes similarity of two lists based on their sum differences.
 
         :param query_value: The list to use as a baseline for comparison.
@@ -189,6 +190,31 @@ class ClassificationComparator(FeatureComparator):
             return 0.0
 
         return 1.0 - abs(query_value.confidence - obj_value.confidence)
+
+
+class SIFTComparator(FeatureComparator):
+    """Extended `FeatureComparator` that computes similarity based on SIFT features."""
+
+    def __init__(self, weight: float = 1.0, distance_threshold: float = 0.75) -> None:
+        super().__init__(weight)
+
+        self._matcher: cv2.BFMatcher = cv2.BFMatcher()
+        """SIFT feature matcher."""
+
+        self.distance_threshold = distance_threshold
+        """Distance threshold for Lowe's ratio test."""
+
+    def compute_similarity(self, query_value: Any, obj_value: Any) -> float:
+        """Compute similarity between SIFT annotations based on Lowe's ratio test and kNN matching ratio."""
+        all_matches = self._matcher.knnMatch(
+            query_value.descriptors, obj_value.descriptors, k=2
+        )
+        matches = [
+            m
+            for m, n in all_matches
+            if m.distance < self.distance_threshold * n.distance
+        ]
+        return len(matches) / max(len(obj_value.descriptors), 1.0)
 
 
 class AdditionalDataComparator(FeatureComparator):
@@ -337,8 +363,8 @@ class PoseComparator(FeatureComparator):
             query_value.translation, obj_value.translation
         )
 
-        pose_sim = self.translation_comparator.compute_similarity(
+        orientation_sim = self.orientation_comparator.compute_similarity(
             query_value.rotation, obj_value.rotation
         )
 
-        return (position_sim + pose_sim) / 2.0
+        return (position_sim + orientation_sim) / 2.0

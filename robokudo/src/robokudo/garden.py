@@ -35,8 +35,10 @@ def grow_tree(
     node: Node,
     include_gui: bool = True,
     run_once: bool = False,
+    visualizer_types: list[type] | None = None,
 ) -> BehaviourTree:
-    """Initialize a behavior tree with all required RoboKudo data structures.
+    """
+    Initialize a behavior tree with all required RoboKudo data structures.
 
     Sets up the blackboard with visualization maps and creates proper tree structure.
     Can optionally wrap the tree in a OneShot decorator for testing or add GUI
@@ -45,7 +47,11 @@ def grow_tree(
     :param tree: The behavior tree to initialize
     :param node: The ROS node to use for tree setup
     :param include_gui: Whether to include visualization support, defaults to True
-    :param run_once: Whether to wrap tree in OneShot for single execution, defaults to False
+    :param run_once: Whether to wrap tree in OneShot for single execution, defaults to
+        False
+    :param visualizer_types: Visualizer backends the GUI should instantiate, forwarded to
+        :class:`~robokudo.vis.visualizer_manager.VisualizationManager`. Defaults to all
+        of them. Has no effect when ``include_gui`` is False.
     :return: The initialized behavior tree
     """
     blackboard = Blackboard()
@@ -74,7 +80,9 @@ def grow_tree(
             "RootNodeWithGUI",
             policy=ParallelPolicy.SuccessOnAll(synchronise=False),
         )
-        root.add_child(VisualizationManager("VisManager"))
+        root.add_child(
+            VisualizationManager("VisManager", visualizer_types=visualizer_types)
+        )
         root.add_child(tree)
 
         behavior_tree = BehaviourTree(root)

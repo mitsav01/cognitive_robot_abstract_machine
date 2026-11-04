@@ -1,13 +1,11 @@
 # CoraPlex — High‑level feature highlights
 
-[![Python Tests](https://github.com/cram2/coraplex/actions/workflows/new-coraplex-ci.yml/badge.svg)](https://github.com/cram2/coraplex/actions/workflows/new-coraplex-ci.yml/badge.svg)
-[![Example Tests](https://github.com/cram2/coraplex/actions/workflows/notebook-test-ci.yml/badge.svg)](https://github.com/cram2/coraplex/actions/workflows/notebook-test-ci.yml/badge.svg)
 
 ```{raw} html
 <div style="display: flex; flex-direction: row; align-items: center; gap: 30px;">
   <div style="flex: 1; max-width: 70%;">
-    <img src="_static/images/new_coraplex_logo_clean.svg" alt="Assimilation Icon" class="only-light" style="width: 100%; height: auto; object-fit: contain;">
-    <img src="_static/images/new_coraplex_logo_clean_dark.svg" alt="Assimilation Icon" class="only-dark" style="width: 100%; height: auto; object-fit: contain;">
+    <img src="_static/images/cora-plex-dark.png" alt="Coraplex Icon" class="only-light" style="width: 100%; height: auto; object-fit: contain;">
+    <img src="_static/images/cora-plex-dark.png" alt="Coraplex Icon" class="only-dark" style="width: 100%; height: auto; object-fit: contain;">
   </div>
 </div>
 ```
@@ -24,7 +22,6 @@
 - Motion building blocks: ready-to-use motion designators (e.g., TCP and gripper control) compose into higher-level actions like pick-up and transport.
 - World model integration: operate over bodies, links, transforms, and semantic annotations; reason about objects and places, not only coordinates.
 - Simulation-first workflow: run end-to-end plans in simulation for rapid iteration, with optional visualization.
-- Clear validation points: action and motion steps can declare pre/post conditions to verify success (e.g., object grasped).
 - Data-driven improvement: stored execution traces support benchmarking, failure analysis, and experiment tracking.
 - Modular and extensible: define custom designators, actions, and plan patterns while leveraging the common orchestration and logging.
 - Tested examples and demos: runnable scenarios (e.g., PR2 pick-and-place) illustrate typical workflows and best practices.
@@ -63,7 +60,7 @@ Source documentation is located in the `doc` directory. Instructions for buildin
 
 ## Examples
 
-Comprehensive examples are provided as Jupyter Notebooks in the `examples` folder and documented in the [Examples section](https://cram2.github.io/cognitive_robot_abstract_machine/coraplex/notebooks/language.html). Refer to the examples folder's `README` for instructions on executing these notebooks.
+Comprehensive examples are provided as Jupyter Notebooks in the `examples` folder and documented in the [Examples section](https://cram2.github.io/cognitive_robot_abstract_machine/coraplex/notebooks/plan.html). Refer to the examples folder's `README` for instructions on executing these notebooks.
 
 
 

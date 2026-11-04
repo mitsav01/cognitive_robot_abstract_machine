@@ -4,14 +4,12 @@ import logging
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List, Callable, TYPE_CHECKING
+from typing_extensions import Callable, TYPE_CHECKING
 
 import numpy as np
 
-from semantic_digital_twin.spatial_types import Point3
-from semantic_digital_twin.spatial_types.spatial_types import (
-    HomogeneousTransformationMatrix,
-)
+from krrood_spatial_math.spatial_types import Point3
+from krrood_spatial_math.spatial_types import HomogeneousTransformationMatrix
 from semantic_digital_twin.world_description.geometry import Mesh
 from semantic_digital_twin.world_description.world_entity import Body
 
@@ -25,8 +23,11 @@ if TYPE_CHECKING:
 @dataclass
 class Step(ABC):
     """
-    A Step is a transformation that takes a World as input and produces a modified World as output.
-    Steps are intended to be used in a Pipeline, where the output World of one Step is passed as the input World to the next Step.
+    A Step is a transformation that takes a World as input and produces a modified World
+    as output.
+
+    Steps are intended to be used in a Pipeline, where the output World of one Step is
+    passed as the input World to the next Step.
     """
 
     @abstractmethod
@@ -41,11 +42,12 @@ class Step(ABC):
 class Pipeline:
     """
     A Pipeline is a sequence of Steps that are applied to a World in order.
-    Each Step takes the World as input and produces a modified World as output.
-    The output World of one Step is passed as the input World to the next Step.
+
+    Each Step takes the World as input and produces a modified World as output. The
+    output World of one Step is passed as the input World to the next Step.
     """
 
-    steps: List[Step]
+    steps: list[Step]
     """
     The list of Steps to be applied in the Pipeline.
     """
@@ -74,15 +76,17 @@ class BodyFilter(Step):
 @dataclass
 class CenterLocalGeometryAndPreserveWorldPose(Step):
     """
-    Adjusts the vertices of the collision meshes of each body in the world so that the origin is at the center of the
-    mesh, and then updates the parent connection of the body to preserve the original world pose.
-    An example where this is useful is when parsing FBX files where all bodies in the resulting world have an origin
-    at (0, 0, 0), even through the collision meshes are not centered around that point.
+    Adjusts the vertices of the collision meshes of each body in the world so that the
+    origin is at the center of the mesh, and then updates the parent connection of the
+    body to preserve the original world pose.
+
+    An example where this is useful is when parsing FBX files where all bodies in the
+    resulting world have an origin at (0, 0, 0), even through the collision meshes are
+    not centered around that point.
     """
 
     def _apply(self, world: World) -> World:
         for body in world.bodies_topologically_sorted:
-
             vertices = []
 
             for coll in body.collision:
@@ -137,19 +141,23 @@ class CenterLocalGeometryAndPreserveWorldPose(Step):
 @dataclass
 class BodyFactoryReplace(Step):
     """
-    Replace bodies in the world that match a given condition with new structures created by a factory.
+    Replace bodies in the world that match a given condition with new structures created
+    by a factory.
     """
 
     annotation_creator: Callable[[Body, World], HasRootKinematicStructureEntity]
     """
-    A callable that takes a Body, and creates a new semantic annotation (including a new body) for it, and adds them to the world.
+    A callable that takes a Body, and creates a new semantic annotation (including a new
+    body) for it, and adds them to the world.
     """
 
     body_condition: Callable[[Body], bool] = lambda x: bool(
         re.compile(r"^dresser_\d+.*$").fullmatch(x.name.name)
     )
     """
-    Condition to filter bodies that should be replaced. Defaults to matching bodies containing "dresser_" followed by digits in their name.
+    Condition to filter bodies that should be replaced.
+
+    Defaults to matching bodies containing "dresser_" followed by digits in their name.
     """
 
     def _apply(self, world: World) -> World:
@@ -167,7 +175,8 @@ class BodyFactoryReplace(Step):
 
             world.remove_kinematic_structure_entity(body)
 
-            parent_connection.child = new_world.root
-            world.merge_world(new_world, parent_connection)
+            world.merge_world(
+                new_world, parent_connection.copy_with_new_child(new_world.root)
+            )
 
         return world

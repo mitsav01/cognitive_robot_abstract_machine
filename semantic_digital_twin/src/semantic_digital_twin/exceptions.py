@@ -1,57 +1,64 @@
 from __future__ import annotations, absolute_import
 
+# %% Imports
 from dataclasses import dataclass, field, Field
-from typing import Dict, Set, Any
+from datetime import timedelta
+from http import HTTPStatus
+from pathlib import Path
 from uuid import UUID
 
 import mujoco
-from typing_extensions import (
-    Optional,
-    List,
-    Type,
-    TYPE_CHECKING,
-    Callable,
-    Union,
-    Any,
-)
+from typing_extensions import TYPE_CHECKING, Callable, Any
 
-from krrood.adapters.exceptions import JSONSerializationError
-from krrood.symbolic_math.symbolic_math import SymbolicMathType
+from krrood.adapters.exceptions import UntrackedObjectError
 from krrood.exceptions import DataclassException
+from krrood.ormatic.utils import classproperty
 from semantic_digital_twin.datastructures.definitions import JointStateType
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
 
 if TYPE_CHECKING:
-    from semantic_digital_twin.semantic_annotations.mixins import HasRootBody
+    from semantic_digital_twin.adapters.ros.messages import MetaData
+    from semantic_digital_twin.input_synchronization import InputSynchronizer
+    from semantic_digital_twin.semantic_annotations.mixins import (
+        HasRootBody,
+        HasSupportingSurface,
+    )
+    from semantic_digital_twin.semantic_annotations.mixins import HasGraspCandidates
+    from semantic_digital_twin.grasping.surface_grasp import SurfaceGrasp
     from semantic_digital_twin.robots.robot_parts import (
         AbstractRobot,
         AbstractRobotPart,
+        EndEffector,
     )
     from semantic_digital_twin.world import World
     from semantic_digital_twin.world_description.geometry import Scale
+    from semantic_digital_twin.datastructures.scan_pattern import ScanPattern
     from semantic_digital_twin.world_description.world_entity import (
+        Connection,
         SemanticAnnotation,
         WorldEntity,
+        WorldEntityWithID,
         KinematicStructureEntity,
     )
-    from semantic_digital_twin.spatial_types.spatial_types import (
-        SpatialType,
-    )
-    from semantic_digital_twin.spatial_types import Vector3, Point3
+    from krrood_spatial_math.spatial_types import Vector3, Point
     from semantic_digital_twin.world_description.degree_of_freedom import (
         DegreeOfFreedomLimits,
         DegreeOfFreedom,
     )
     from semantic_digital_twin.world_description.world_modification import (
+        WorldModelModificationBlock,
         WorldModification,
     )
-    from semantic_digital_twin.collision_checking.collision_matrix import CollisionCheck
+    from semantic_digital_twin.collision_checking.collision_matrix import (
+        CollisionCheck,
+        CollisionRule,
+    )
 
 
 @dataclass
 class NoJointStateWithType(DataclassException):
     """
-    Raised when a JointState type is search which is not defined
+    Raised when a JointState type is search which is not defined.
     """
 
     joint_state: JointStateType
@@ -64,13 +71,35 @@ class NoJointStateWithType(DataclassException):
 
 
 @dataclass
+class MalformedHexColor(DataclassException):
+    """
+    Raised when a string meant to name a color is not written as hex digits.
+    """
+
+    hex_color: str
+    """
+    The string that was read as a color.
+    """
+
+    def error_message(self) -> str:
+        return f"'{self.hex_color}' does not name a color."
+
+    def suggest_correction(self) -> str:
+        return (
+            "write the color as two hex digits per channel, red first, optionally "
+            "preceded by a '#' and followed by a fourth pair for the opacity, for "
+            "example '#4080C0' or '#4080C020'."
+        )
+
+
+@dataclass
 class UnknownWorldModification(DataclassException):
     """
     Raised when an unknown world modification is attempted.
     """
 
     call: Callable
-    kwargs: Dict[str, Any]
+    kwargs: dict[str, Any]
 
     def error_message(self) -> str:
         call_name = getattr(self.call, "__name__", repr(self.call))
@@ -87,10 +116,11 @@ class UnknownWorldModification(DataclassException):
 @dataclass
 class MismatchingIDsInWorldModification(DataclassException):
     """
-    Raised when the UUIDs of a world modification during application are not consistent with the UUIDs assigned during initialization.
+    Raised when the UUIDs of a world modification during application are not consistent
+    with the UUIDs assigned during initialization.
     """
 
-    modification_type: Type[WorldModification]
+    modification_type: type[WorldModification]
 
     original_uuids: list[UUID]
     """
@@ -119,7 +149,8 @@ class MismatchingIDsInWorldModification(DataclassException):
 @dataclass
 class LogicalError(DataclassException):
     """
-    An error that happens due to mistake in the logical operation or usage of the API during runtime.
+    An error that happens due to mistake in the logical operation or usage of the API
+    during runtime.
     """
 
 
@@ -129,7 +160,7 @@ class NegativeConnectionVelocity(DataclassException):
     An error that happens when a negative velocity limit is provided for a connection.
     """
 
-    connection_name: Union[str, PrefixedName]
+    connection_name: str | PrefixedName
     """
     The name of the connection for which the velocity limit is negative.
     """
@@ -149,7 +180,8 @@ class NegativeConnectionVelocity(DataclassException):
 @dataclass
 class DofNotInWorldStateError(DataclassException, KeyError):
     """
-    An exception raised when a degree of freedom is not found in the world's state dictionary.
+    An exception raised when a degree of freedom is not found in the world's state
+    dictionary.
     """
 
     dof_id: UUID
@@ -168,7 +200,8 @@ class DofNotInWorldStateError(DataclassException, KeyError):
 @dataclass
 class IncorrectWorldStateValueShapeError(DataclassException, ValueError):
     """
-    An exception raised when the shape of a value in the world's state dictionary is incorrect.
+    An exception raised when the shape of a value in the world's state dictionary is
+    incorrect.
     """
 
     dof_id: UUID
@@ -205,7 +238,8 @@ class WrongWorldModelVersion(LogicalError):
 @dataclass
 class NonMonotonicTimeError(LogicalError):
     """
-    Raised when attempting to append a world state with a time that is not strictly greater than the last time.
+    Raised when attempting to append a world state with a time that is not strictly
+    greater than the last time.
     """
 
     last_time: float
@@ -242,9 +276,145 @@ class UsageError(LogicalError):
 
 
 @dataclass
+class InvalidCameraResolutionError(UsageError):
+    """
+    Raised when a camera resolution cannot describe an image.
+    """
+
+    width: int
+    """
+    The invalid image width.
+    """
+
+    height: int
+    """
+    The invalid image height.
+    """
+
+    def error_message(self) -> str:
+        return (
+            "Camera resolution width and height must be positive, "
+            f"got width={self.width} and height={self.height}."
+        )
+
+    def suggest_correction(self) -> str:
+        return "provide positive width and height values."
+
+
+@dataclass
+class InvalidCameraFieldOfViewError(UsageError):
+    """
+    Raised when camera viewing angles cannot describe a projection.
+    """
+
+    horizontal_angle: float
+    """
+    Invalid horizontal viewing angle in radians.
+    """
+
+    vertical_angle: float
+    """
+    Invalid vertical viewing angle in radians.
+    """
+
+    def error_message(self) -> str:
+        return (
+            "Camera field-of-view angles must be between zero and pi radians, "
+            f"got horizontal={self.horizontal_angle} and vertical={self.vertical_angle}."
+        )
+
+    def suggest_correction(self) -> str:
+        return "provide positive viewing angles smaller than pi radians."
+
+
+@dataclass
+class InvalidCameraDistortionError(UsageError):
+    """
+    Raised when distortion coefficients do not match their model.
+    """
+
+    model: str
+    """
+    Distortion model whose coefficients are invalid.
+    """
+
+    reason: str
+    """
+    Reason the distortion value is invalid.
+    """
+
+    def error_message(self) -> str:
+        return f"Invalid camera distortion model '{self.model}': {self.reason}."
+
+    def suggest_correction(self) -> str:
+        return "provide finite coefficients defined by the distortion model."
+
+
+@dataclass
+class InvalidPinholeCameraModelError(UsageError):
+    """
+    Raised when pinhole calibration parameters cannot describe an image.
+    """
+
+    reason: str
+    """
+    Reason the calibration is invalid.
+    """
+
+    def error_message(self) -> str:
+        return f"Invalid pinhole camera model: {self.reason}."
+
+    def suggest_correction(self) -> str:
+        return "provide positive focal lengths and a principal point within the image."
+
+
+@dataclass
+class InvalidCameraRangeError(UsageError):
+    """
+    Raised when a camera distance interval is empty or negative.
+    """
+
+    minimum_distance: float
+    """
+    Invalid minimum distance in meters.
+    """
+
+    maximum_distance: float
+    """
+    Invalid maximum distance in meters.
+    """
+
+    def error_message(self) -> str:
+        return (
+            "Camera range requires a non-negative minimum below its maximum, "
+            f"got minimum={self.minimum_distance} and maximum={self.maximum_distance}."
+        )
+
+    def suggest_correction(self) -> str:
+        return "provide an ordered, non-negative distance interval."
+
+
+@dataclass
+class ROSNodeNotRegisteredError(UsageError, RuntimeError):
+    """
+    Raised when shared ROS node access is requested before registration.
+    """
+
+    def error_message(self) -> str:
+        return "No shared ROS node is registered in this process."
+
+    def suggest_correction(self) -> str:
+        return (
+            "register the application-owned ROS node before constructing components "
+            "that require ROS access. Please check out the ROSNodeRegistry class and its register() method."
+        )
+
+
+@dataclass
 class WorldValidationError(LogicalError):
     """
-    Raised when the world fails validation, e.g., when the kinematic structure is not a tree.
+    Raised when the world fails validation, e.g., when the kinematic structure is not a
+    tree.
     """
 
     world: World
@@ -270,34 +440,117 @@ class WorldIsNotATreeError(WorldValidationError):
 
 
 @dataclass
-class BrokenWorldModificationHistoryError(WorldValidationError):
+class PartiallyAppliedWorldModificationError(WorldValidationError):
     """
-    Raised when the world's modification history was detected to be broken.
+    Raised when an exception escapes a modification block after the block already
+    changed the world.
+
+    The changes stay in the world, but they are neither in its modification history nor
+    published, so copies and synchronized worlds no longer match it.
+
+    .. warning::
+        This always signals a bug, never a condition to handle.
     """
 
-    potential_cause: Optional[DataclassException] = None
+    cause: Exception
     """
-    The exception that was thrown and caused the world's modification history to be broken.
+    The exception that escaped the modification block.
+    """
+
+    applied_modifications: WorldModelModificationBlock
+    """
+    The modifications the block applied to the world before the exception.
+    """
+
+    @classproperty
+    def issue_tracker_url(cls) -> str:
+        """
+        :return: Where to report a failed modification block.
+        """
+        return "https://github.com/cram2/cognitive_robot_abstract_machine/issues"
+
+    def error_message(self) -> str:
+        applied_modification_types = ", ".join(
+            type(modification).__name__ for modification in self.applied_modifications
+        )
+        return (
+            f"A modification block raised {type(self.cause).__name__}: {self.cause}\n"
+            f"It had already applied {len(self.applied_modifications)} "
+            f"modification(s): {applied_modification_types}. They stay in the world but "
+            f"are not in its modification history and were not published, so copies and "
+            f"synchronized worlds no longer match {self.world}"
+        )
+
+    def suggest_correction(self) -> str:
+        return (
+            f"this is a bug, not a condition to handle: a modification block must not "
+            f"raise. Find where the cause above was raised and fix it there; if the "
+            f"mistake is not in your code, or you cannot tell, report it at "
+            f"{self.issue_tracker_url} with this traceback."
+        )
+
+
+@dataclass
+class InsufficientModificationHistoryError(WorldValidationError):
+    """
+    Raised when attempting to roll back more modification blocks than the world's
+    history contains.
+    """
+
+    requested_count: int
+    """
+    The number of modification blocks that were requested to be rolled back.
+    """
+
+    available_count: int
+    """
+    The number of modification blocks actually available in the world's history.
     """
 
     def error_message(self) -> str:
         return (
-            f"The world's modification history was detected to be broken. "
-            f"The world is {self.world}"
-            f" Potential cause: {self.potential_cause}"
+            f"Cannot roll back {self.requested_count} modification block(s): the "
+            f"world's history only contains {self.available_count}."
         )
 
     def suggest_correction(self) -> str:
-        return ""
+        return "reduce the requested count to at most the number of available modification blocks."
+
+
+@dataclass
+class InvalidRollbackVersionError(WorldValidationError):
+    """
+    Raised when attempting to roll back to a version the world has not (yet) reached.
+    """
+
+    target_version: int
+    """
+    The version that was requested.
+    """
+
+    current_version: int
+    """
+    The version the world is currently at.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"Cannot roll back to version {self.target_version}: the world is "
+            f"currently at version {self.current_version}."
+        )
+
+    def suggest_correction(self) -> str:
+        return "pass a version between 0 and the world's current version."
 
 
 @dataclass
 class WorldContainsOrphanedDegreeOfFreedom(WorldValidationError):
     """
-    Raised when the kinematic structure of the world contains orphaned degrees of freedom during validation.
+    Raised when the kinematic structure of the world contains orphaned degrees of
+    freedom during validation.
     """
 
-    actual_dofs: Set[DegreeOfFreedom]
+    actual_dofs: set[DegreeOfFreedom]
     """
     The actual degrees of freedom used in connections.
     """
@@ -313,9 +566,134 @@ class WorldContainsOrphanedDegreeOfFreedom(WorldValidationError):
 
 
 @dataclass
+class WorldEntityWithIDBelongsToAnotherWorld(WorldValidationError):
+    """
+    Raised when looking an id up in a world answers with an entity that reports
+    belonging to a different world.
+
+    A world's lookup tables are meant to hold only its own entities, so this means one
+    was left registered here after being added elsewhere. Only a
+    :class:`~semantic_digital_twin.world_description.world_entity.WorldEntityWithID` is
+    looked up by id, which is why an entity without one cannot reach this.
+    """
+
+    world_entity: WorldEntityWithID
+    """
+    The entity that was found under this world but reports another one.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"Looking up id {self.world_entity.id} in world '{self.world.name}' returned "
+            f"'{self.world_entity.name}', which belongs to world "
+            f"'{self.world_entity._world.name if self.world_entity._world else None}'."
+        )
+
+    def suggest_correction(self) -> str:
+        return (
+            "The entity was left registered in this world after being added to another "
+            "one; remove it from this world before adding it elsewhere."
+        )
+
+
+@dataclass
+class WorldHasNoUniqueRootError(WorldValidationError):
+    """
+    Raised when a non-empty world has none or more than one root.
+    """
+
+    possible_roots: list[KinematicStructureEntity]
+    """
+    The kinematic structure entities without incoming connections that were found.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"A world must have exactly one root, but found {len(self.possible_roots)}: "
+            f"{self.possible_roots}."
+        )
+
+    def suggest_correction(self) -> str:
+        return ""
+
+
+@dataclass
+class CopiedWorldDiffersFromOriginalError(WorldValidationError):
+    """
+    Raised when deepcopying a world does not reproduce the original world's entities.
+    """
+
+    differing_entity_hashes: list[int]
+    """
+    Hashes of the entities that are only in the original world or only in the copy.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"Deepcopying the world changed its entity set; "
+            f"{len(self.differing_entity_hashes)} entities differ between the original "
+            f"and the copy (hashes: {self.differing_entity_hashes})."
+        )
+
+    def suggest_correction(self) -> str:
+        return ""
+
+
+@dataclass
+class NoControlledConnectionInChainError(UsageError):
+    """
+    Raised when the kinematic chain between two entities contains no controlled
+    connection.
+    """
+
+    root: KinematicStructureEntity
+    """
+    The start of the chain.
+    """
+
+    tip: KinematicStructureEntity
+    """
+    The end of the chain.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"The chain between {self.root} and {self.tip} contains no controlled "
+            f"connection."
+        )
+
+    def suggest_correction(self) -> str:
+        return ""
+
+
+@dataclass
+class RobotPartBelongsToAnotherRobotError(UsageError):
+    """
+    Raised when a robot part refers to a robot other than the one that holds it.
+    """
+
+    robot_part: AbstractRobotPart
+    """
+    The robot part whose robot reference was checked.
+    """
+
+    robot: AbstractRobot
+    """
+    The robot that holds the part but is not referred to by it.
+    """
+
+    def error_message(self) -> str:
+        return f"Robot part {self.robot_part} does not refer to robot {self.robot}."
+
+    def suggest_correction(self) -> str:
+        return ""
+
+
+@dataclass
 class InvalidConnectionLimits(UsageError):
     """
-    Raised when the lower limit is not less than the upper limit for a degree of freedom.
+    Raised when the lower limit is not less than the upper limit for a degree of
+    freedom.
     """
 
     name: PrefixedName
@@ -333,6 +711,118 @@ class InvalidConnectionLimits(UsageError):
 
     def suggest_correction(self) -> str:
         return ""
+
+
+@dataclass
+class MissingPositionLimits(UsageError):
+    """
+    Raised when a target position must be derived from the limits of a degree of freedom
+    that declares no position limits.
+    """
+
+    name: PrefixedName
+    """
+    The name of the degree of freedom.
+    """
+
+    limits: DegreeOfFreedomLimits
+    """
+    The limits without positions.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"Degree of freedom {self.name} must declare position limits. "
+            f"Given limits: {self.limits}."
+        )
+
+    def suggest_correction(self) -> str:
+        return ""
+
+
+@dataclass
+class MissingConnectionParentError(UsageError):
+    """
+    Raised when a connection is spawned without a parent kinematic structure entity.
+    """
+
+    connection_name: str | None
+    """
+    The name of the connection specification that was spawned without a parent.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"Connecting the connection '{self.connection_name}' requires a parent kinematic structure entity, "
+            f"but None could be identified."
+        )
+
+    def suggest_correction(self) -> str:
+        return (
+            "pass the parent entity via the 'parent' keyword argument of connect, or make sure that the current "
+            "world is not empty."
+        )
+
+
+@dataclass
+class MissingConnectionAxisError(UsageError):
+    """
+    Raised when an active connection is created without a movement axis.
+    """
+
+    connection_type_name: str
+    """
+    The name of the active connection type that was created without an axis.
+    """
+
+    def error_message(self) -> str:
+        return f"'{self.connection_type_name}' is an active connection and requires an axis."
+
+    def suggest_correction(self) -> str:
+        return "pass a movement axis via the 'axis' keyword argument."
+
+
+@dataclass
+class MissingURDFJointAxisError(UsageError):
+    """
+    Raised when a movable URDF joint declares no axis to move along.
+    """
+
+    joint_name: str
+    """
+    The name of the joint that declares no axis.
+    """
+
+    joint_type: str
+    """
+    The URDF type of the joint.
+    """
+
+    def error_message(self) -> str:
+        return f"The {self.joint_type} URDF joint '{self.joint_name}' declares no axis."
+
+    def suggest_correction(self) -> str:
+        return (
+            'declare the axis the joint moves along with an <axis xyz="..."/> element.'
+        )
+
+
+@dataclass
+class ZeroLengthURDFJointAxisError(UsageError):
+    """
+    Raised when a URDF joint declares an axis of zero length, which names no direction.
+    """
+
+    joint_name: str
+    """
+    The name of the joint whose axis has zero length.
+    """
+
+    def error_message(self) -> str:
+        return f"The URDF joint '{self.joint_name}' declares an axis of zero length."
+
+    def suggest_correction(self) -> str:
+        return "declare a non-zero axis for the joint."
 
 
 @dataclass
@@ -389,8 +879,8 @@ class MismatchingWorld(UsageError):
 @dataclass
 class CannotBeAPartOf(UsageError):
     """
-    Raised when ``add`` is called with a part that no part-whole relationship field of the
-    annotation accepts.
+    Raised when ``add`` is called with a part that no part-whole relationship field of
+    the annotation accepts.
     """
 
     annotation: SemanticAnnotation
@@ -419,8 +909,8 @@ class CannotBeAPartOf(UsageError):
 @dataclass
 class AmbiguousPart(UsageError):
     """
-    Raised when ``add`` is called with a part whose type matches more than one part-whole
-    relationship field of the annotation, so the target field is ambiguous.
+    Raised when ``add`` is called with a part whose type matches more than one part-
+    whole relationship field of the annotation, so the target field is ambiguous.
     """
 
     annotation: SemanticAnnotation
@@ -433,7 +923,7 @@ class AmbiguousPart(UsageError):
     The part that could not be unambiguously added.
     """
 
-    fields: List[Field]
+    fields: list[Field]
     """
     The names of the part-whole relationship fields whose element type accepts the part.
     """
@@ -447,51 +937,173 @@ class AmbiguousPart(UsageError):
 
     def suggest_correction(self) -> str:
         return (
-            f"consider if its practical to use the 'field_name' keyword argument for the `add` method to"
-            f" disambiguate the matching cases."
+            "consider if its practical to use the 'field_name' keyword argument for the `add` method to"
+            " disambiguate the matching cases."
         )
 
 
 @dataclass
 class UnknownPartWholeRelationshipField(UsageError):
     """
-    Raised when ``add`` is called with a ``field_name`` that is not a part-whole relationship field
-    of the annotation.
+    Raised when ``add`` is called with a ``field_name`` that is not a part-whole
+    relationship field of the annotation.
     """
 
-    annotation: HasRootBody
+    annotation: type[HasRootBody]
     """
-    The annotation the part was being added to.
+    The annotation type the part was being added to.
     """
 
     field_name: str
     """
-    The field name that was requested but does not exist as a part-whole relationship field.
+    The field name that was requested but does not exist as a part-whole relationship
+    field.
     """
 
-    available_fields: List[str]
+    available_fields: list[str]
     """
     The names of the annotation's part-whole relationship fields.
     """
 
     def error_message(self) -> str:
         return (
-            f"{type(self.annotation).__name__} has no part-whole relationship field "
+            f"{self.annotation.__name__} has no part-whole relationship field "
             f"'{self.field_name}."
         )
 
     def suggest_correction(self) -> str:
         return (
-            f"the available fields are:"
-            f" {', '.join(self.available_fields) or '(none)'}"
+            f"the available fields are: {', '.join(self.available_fields) or '(none)'}"
         )
+
+
+@dataclass
+class CollisionDiffersFromVisualError(UsageError):
+    """
+    Raised when a part is split off a body whose collision shapes are not its visual
+    shapes, such as a convex decomposition, which cutting the visual shapes would throw
+    away.
+    """
+
+    body_name: PrefixedName
+    """
+    The name of the body.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"The collision shapes of '{self.body_name}' differ from its visual shapes, "
+            f"so splitting a part off would replace them by pieces of the visual shapes."
+        )
+
+    def suggest_correction(self) -> str:
+        return (
+            "split the parts off before decomposing the collision shapes, or give the "
+            "PartSplitter a decomposer that decomposes each piece again."
+        )
+
+
+@dataclass
+class NoSinglePartWholeRelationshipField(UsageError):
+    """
+    Raised when the part-whole relationship field a part goes to is chosen by the part's
+    type alone, but not exactly one field of the annotation holds parts of that type.
+    """
+
+    annotation: type[HasRootBody]
+    """
+    The annotation type the part is for.
+    """
+
+    part_type: type[HasRootBody]
+    """
+    The type of the part.
+    """
+
+    matching_fields: list[str]
+    """
+    The names of the annotation's part-whole relationship fields that hold parts of that
+    type.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"{self.annotation.__name__} has {len(self.matching_fields)} part-whole "
+            f"relationship fields for a {self.part_type.__name__}: "
+            f"{', '.join(self.matching_fields) or '(none)'}."
+        )
+
+    def suggest_correction(self) -> str:
+        return "name the field the part goes to."
+
+
+@dataclass
+class PartWholeCardinalityError(UsageError):
+    """
+    Raised when a part specification supplies a list of parts for a singular (non-to-
+    many) part-whole relationship field.
+    """
+
+    annotation_type_name: str
+    """
+    The name of the annotation type the parts were being mounted onto.
+    """
+
+    field_name: str
+    """
+    The singular part-whole relationship field that was given a list of parts.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"The part-whole relationship field '{self.field_name}' of "
+            f"'{self.annotation_type_name}' is singular and accepts only one part, "
+            f"but a list of parts was supplied."
+        )
+
+    def suggest_correction(self) -> str:
+        return "supply a single part specification for this field instead of a list."
+
+
+@dataclass
+class PartWholeFieldInAnnotationKwargs(UsageError):
+    """
+    Raised when ``annotation_kwargs`` contains a key that names a part-whole
+    relationship field.
+
+    Such fields must be supplied via ``part_specifications`` on the annotation
+    specification factory so they are spawned and mounted, not passed straight to the
+    annotation constructor.
+    """
+
+    annotation_type_name: str
+    """
+    The name of the annotation type the keyword arguments were meant for.
+    """
+
+    field_names: list[str]
+    """
+    The offending ``annotation_kwargs`` keys that name part-whole relationship fields.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"annotation_kwargs for '{self.annotation_type_name}' contains part-whole relationship "
+            f"fields: {', '.join(self.field_names)}."
+        )
+
+    def suggest_correction(self) -> str:
+        return "move these entries to part_specifications instead of annotation_kwargs."
 
 
 @dataclass
 class MechanicalJointAlreadyMounted(UsageError):
     """
-    Raised when a mechanical joint that already connects a child is mounted onto a different whole.
-    If you think a single Mechanical Joint should be able to have multiple children, contact @LucaKro.
+    Raised when a mechanical joint that already connects a child is mounted onto a
+    different whole.
+
+    If you think a single Mechanical Joint should be able to have multiple children,
+    contact @LucaKro.
     """
 
     joint: SemanticAnnotation
@@ -511,7 +1123,7 @@ class MechanicalJointAlreadyMounted(UsageError):
         )
 
     def suggest_correction(self) -> str:
-        return f"if you think that you found a case where this error does not apply, please contact @LucaKro"
+        return "if you think that you found a case where this error does not apply, please contact @LucaKro"
 
 
 @dataclass
@@ -520,7 +1132,7 @@ class SemanticAnnotationCircularDependencyError(UsageError):
     Raised when a circular dependency between semantic annotations is detected.
     """
 
-    semantic_annotations: List[SemanticAnnotation]
+    semantic_annotations: list[SemanticAnnotation]
     """
     The list of semantic annotations that in which a circular dependency is detected.
     """
@@ -533,17 +1145,42 @@ class SemanticAnnotationCircularDependencyError(UsageError):
 
 
 @dataclass
+class MissingMovableJointError(UsageError):
+    """
+    Raised when a part is to be moved, but nothing moves it: its root is fixed to its
+    parent.
+    """
+
+    semantic_annotation: SemanticAnnotation
+    """
+    The part that has no movable joint.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"{type(self.semantic_annotation).__name__} {self.semantic_annotation.name} "
+            f"has no movable joint: its root is fixed to its parent."
+        )
+
+    def suggest_correction(self) -> str:
+        return (
+            "create it with an active parent_connection_specification, or mount it on "
+            "one with mount_on_movable_joint."
+        )
+
+
+@dataclass
 class MissingSemanticAnnotationError(UsageError):
     """
     Raised when a semantic annotation is required but missing.
     """
 
-    semantic_annotation_class: Type[SemanticAnnotation]
+    semantic_annotation_class: type[SemanticAnnotation]
     """
     The semantic annotation class that requires another semantic annotation.
     """
 
-    missing_semantic_annotation_class: Type[SemanticAnnotation]
+    missing_semantic_annotation_class: type[SemanticAnnotation]
     """
     The missing semantic annotation class.
     """
@@ -569,7 +1206,7 @@ class InvalidPlaneDimensions(UsageError):
     The scale of the plane.
     """
 
-    clazz: Type
+    clazz: type
     """
     The class for which the dimensions are invalid.
     """
@@ -582,10 +1219,34 @@ class InvalidPlaneDimensions(UsageError):
 
 
 @dataclass
+class HandleWiderThanLong(UsageError):
+    """
+    Raised when a handle scale is wider (y) than it is long (z).
+    """
+
+    scale: Scale
+    """
+    The scale the handle geometry was requested with.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"The handle scale {self.scale} is wider (y={self.scale.y}) than it is "
+            f"long (z={self.scale.z})."
+        )
+
+    def suggest_correction(self) -> str:
+        return (
+            "pass the length of the handle as z and its width as y, and roll the "
+            "handle pose to lay the bar along the front it is mounted on."
+        )
+
+
+@dataclass
 class UselessConceptError(UsageError):
     """
-    Used to indicate that the operation the user is trying to perform is not useful in the current context, even
-    though it might be technically possible.
+    Used to indicate that the operation the user is trying to perform is not useful in
+    the current context, even though it might be technically possible.
     """
 
     reason: str
@@ -615,7 +1276,7 @@ class InvalidHingeActiveAxis(UsageError):
         return f"Axis {self.axis} provided when trying to calculate the hinge position is invalid."
 
     def suggest_correction(self) -> str:
-        return "if you think this is incorrect, consider extending Door.calculate_world_T_hinge_based_on_handle."
+        return "if you think this is incorrect, consider extending Door.calculate_self_T_movable_joint."
 
 
 @dataclass
@@ -658,16 +1319,18 @@ class MissingWorldModificationContextError(UsageError):
 @dataclass
 class MismatchingPublishChangesAttribute(UsageError):
     """
-    Raised when trying to enter a world modification context with a different publish_changes policy than the currently active world modification context.
+    Raised when trying to enter a nested world modification or state batch context with
+    a different publish_changes policy than the context it is nested in.
     """
 
     active_publish_changes: bool
     """
-    The publish_changes of the currently active world modification context.
+    The publish_changes of the currently active context.
     """
+
     proposed_publish_changes: bool
     """
-    The publish_changes of the world modification context that is being entered.
+    The publish_changes of the context that is being entered.
     """
 
     def error_message(self) -> str:
@@ -682,7 +1345,7 @@ class MismatchingPublishChangesAttribute(UsageError):
 
 @dataclass
 class MissingPublishChangesKWARG(UsageError):
-    kwargs: Dict[str, Any]
+    kwargs: dict[str, Any]
 
     def error_message(self) -> str:
         return (
@@ -699,13 +1362,15 @@ class MissingPublishChangesKWARG(UsageError):
 class StateUpdateContainsUnknownDegreesOfFreedomError(UsageError):
     """
     Raised when a WorldStateUpdate is received that contains one or more DOF identifiers
-    absent from the world state index.  This indicates a severe model/state desynchronization
-    that must be investigated rather than silently ignored.
+    absent from the world state index.
+
+    This indicates a severe model/state desynchronization that must be investigated
+    rather than silently ignored.
     """
 
-    unknown_identifiers: List[UUID]
+    unknown_identifiers: list[UUID]
     """
-    List of unknown DOF UUIDs that were attempted to update the state of
+    List of unknown DOF UUIDs that were attempted to update the state of.
     """
 
     def error_message(self) -> str:
@@ -721,11 +1386,154 @@ class StateUpdateContainsUnknownDegreesOfFreedomError(UsageError):
 
 
 @dataclass
+class WorldHasNoSynchronizerError(UsageError):
+    """
+    Raised when the synchronizer of a world is asked for, but the world publishes its
+    changes nowhere.
+    """
+
+    world: World
+    """
+    The world without a synchronizer.
+    """
+
+    def error_message(self) -> str:
+        return f"{self.world} does not publish its changes to other processes."
+
+    def suggest_correction(self) -> str:
+        return "Create a WorldSynchronizer for this world."
+
+
+@dataclass
+class SynchronizerNotConnectedError(UsageError):
+    """
+    Raised when a synchronizer was created but its topic never became usable, so that
+    whatever it publishes would be dropped.
+    """
+
+    topic_name: str
+    """
+    The topic the synchronizer publishes on and listens to.
+    """
+
+    timeout: timedelta
+    """
+    The time that was spent waiting for the topic.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"The synchronizer of '{self.topic_name}' did not reach a single subscriber "
+            f"within {self.timeout.total_seconds()}s, not even its own."
+        )
+
+    def suggest_correction(self) -> str:
+        return "Check that the ros node of the synchronizer is alive and its middleware is running."
+
+
+@dataclass
+class WorldUpdateReferencesUnknownEntityError(UsageError):
+    """
+    Raised when an update refers to an entity this world never received, which leaves
+    everything the missing update carried out of reach.
+    """
+
+    publisher: MetaData
+    """
+    The synchronizer whose update could not be applied.
+    """
+
+    entity_id: UUID
+    """
+    The entity the update refers to.
+
+    Only its id is known, because the update that created it never arrived.
+    """
+
+    entity_name: PrefixedName | None
+    """
+    The name the update calls that entity, or ``None`` where it carries none.
+    """
+
+    def error_message(self) -> str:
+        named_entity = (
+            f"'{self.entity_name}' ({self.entity_id})"
+            if self.entity_name is not None
+            else f"'{self.entity_id}'"
+        )
+        return (
+            f"The update of '{self.publisher.node_name}' refers to the entity "
+            f"{named_entity}, which this world never received."
+        )
+
+    def suggest_correction(self) -> str:
+        return (
+            "Create the synchronizer of a world before modifying that world: changes made "
+            "before it exists reach nobody, and every later change that builds on them "
+            "cannot be applied."
+        )
+
+
+@dataclass
+class WorldHasMultipleSynchronizersError(UsageError):
+    """
+    Raised when the synchronizer of a world is asked for, but several of them publish
+    its changes, leaving it undecided which stream a position would refer to.
+    """
+
+    world: World
+    """
+    The world with more than one synchronizer.
+    """
+
+    synchronizer_count: int
+    """
+    How many synchronizers publish the changes of the world.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"{self.synchronizer_count} synchronizers publish the changes of "
+            f"{self.world}."
+        )
+
+    def suggest_correction(self) -> str:
+        return "Close all but one of them."
+
+
+@dataclass
+class WorldHasMultipleTfPublishersError(UsageError):
+    """
+    Raised when the tf publisher of a world is asked for, but several of them publish
+    its tf tree, leaving it undecided which one names its frames.
+    """
+
+    world: World
+    """
+    The world with more than one tf publisher.
+    """
+
+    publisher_count: int
+    """
+    How many publishers publish the tf tree of the world.
+    """
+
+    def error_message(self) -> str:
+        return f"{self.publisher_count} publishers publish the tf tree of {self.world}."
+
+    def suggest_correction(self) -> str:
+        return "Stop all but one of them."
+
+
+@dataclass
 class ApplyMissedMessagesWhileWorldIsBeingModifiedError(UsageError):
     """
-    Raised when apply_missed_messages is called while a modify_world context is active on the synchronizer's world.
-    Applying missed messages requires entering a modify_world context internally, which would conflict
-    with any currently active modify_world context due to mismatching publish_changes policies.
+    Raised when apply_missed_messages is called while a modify_world context is active
+    on the synchronizer's world.
+
+    Applying missed messages requires entering a modify_world context internally, which
+    would conflict with any currently active modify_world context due to mismatching
+    publish_changes policies.
     """
 
     def error_message(self) -> str:
@@ -737,7 +1545,7 @@ class ApplyMissedMessagesWhileWorldIsBeingModifiedError(UsageError):
 
 @dataclass
 class DuplicateWorldEntityError(UsageError):
-    world_entities: List[WorldEntity]
+    world_entities: list[WorldEntity]
 
     def error_message(self) -> str:
         names = [str(world_entity.name) for world_entity in self.world_entities]
@@ -778,90 +1586,12 @@ class DuplicateRobotAssignmentsError(UsageError):
 
 
 @dataclass
-class SpatialTypesError(UsageError):
-    pass
-
-
-@dataclass
-class InsufficientVectorsError(SpatialTypesError):
-    """
-    Raised when a rotation matrix is constructed from fewer than two vectors.
-    """
-
-    x: Optional[Vector3]
-    y: Optional[Vector3]
-    z: Optional[Vector3]
-
-    def error_message(self) -> str:
-        return (
-            f"from_vectors requires at least two of the vectors x, y, z to be provided; "
-            f"the third is computed via the cross product."
-            f"X Vector was: {self.x}"
-            f"Y Vector was: {self.y}"
-            f"Z Vector was: {self.z}"
-        )
-
-    def suggest_correction(self) -> str:
-        return ""
-
-
-@dataclass
-class ReferenceFrameMismatchError(SpatialTypesError):
-    expected_frame: KinematicStructureEntity
-    """
-    The frame the operation requires.
-    """
-
-    actual_frame: KinematicStructureEntity
-    """
-    The frame that was found instead.
-    """
-
-    context: Optional[str] = None
-    """
-    Description of the value whose frame was checked, e.g. the argument name.
-    """
-
-    def error_message(self) -> str:
-        checked_value = self.context or "the given value"
-        return (
-            f"Expected {checked_value} to be expressed in frame '{self.expected_frame.name}', "
-            f"but it is expressed in frame '{self.actual_frame.name}'."
-        )
-
-    def suggest_correction(self) -> str:
-        return (
-            "transform it into the expected frame first, e.g. via "
-            "world.transform(value, target_frame), or construct it with the expected frame."
-        )
-
-
-@dataclass
-class MissingReferenceFrameError(SpatialTypesError):
-    """
-    Represents an error that occurs when a spatial type lacks a reference frame, even though its required for the
-    current operation
-    """
-
-    spatial_type: SpatialType
-    """
-    Spatial type that lacks a reference frame.
-    """
-
-    def error_message(self) -> str:
-        return f"Spatial type {self.spatial_type} has no reference frame, but this operation requires one."
-
-    def suggest_correction(self) -> str:
-        return "construct it with an explicit frame, e.g. Point3(x, y, z, reference_frame=some_body)."
-
-
-@dataclass
 class ParsingError(DataclassException, Exception):
     """
     An error that happens during parsing of files.
     """
 
-    file_path: Optional[str] = None
+    file_path: str | None = None
 
     def error_message(self) -> str:
         return f"Error parsing file {self.file_path}."
@@ -881,7 +1611,7 @@ class PackageResolutionError(ParsingError):
     The package name that could not be resolved.
     """
 
-    details: Optional[str] = field(kw_only=True, default=None)
+    details: str | None = field(kw_only=True, default=None)
     """
     Details about why the resolution failed.
     """
@@ -907,7 +1637,7 @@ class PathResolutionError(ParsingError):
     The URI that could not be resolved.
     """
 
-    details: Optional[str] = field(kw_only=True, default=None)
+    details: str | None = field(kw_only=True, default=None)
     """
     Details about why the resolution failed.
     """
@@ -923,10 +1653,39 @@ class PathResolutionError(ParsingError):
 
 
 @dataclass
-class WorldEntityNotFoundError(UsageError):
-    name_or_hash: Union[str, PrefixedName, int]
+class DatasetServerError(ParsingError):
+    """
+    Raised when a dataset server does not answer with what was asked of it.
+    """
 
-    suggestions: List[Union[str, PrefixedName]] = field(default_factory=list)
+    url: str = field(kw_only=True)
+    """
+    The address that was requested.
+    """
+
+    status_code: int = field(kw_only=True)
+    """
+    The status the server answered with.
+    """
+
+    def error_message(self) -> str:
+        return f"The dataset server answered {self.status_code} for '{self.url}'."
+
+    def suggest_correction(self) -> str:
+        if self.status_code == HTTPStatus.NOT_FOUND:
+            return (
+                "check that the dataset server serves the directory this path is under."
+            )
+        return (
+            "check that the dataset server is reachable and serving the dataset root."
+        )
+
+
+@dataclass
+class WorldEntityNotFoundError(UsageError):
+    name_or_hash: str | PrefixedName | int
+
+    suggestions: list[str | PrefixedName] = field(default_factory=list)
     """
     Names of existing world entities that closely match the searched name.
     """
@@ -948,10 +1707,11 @@ class WorldEntityNotFoundError(UsageError):
 @dataclass
 class MissingDefaultCameraError(UsageError):
     """
-    Raised when trying to access the default camera of a robot that does not have a default camera.
+    Raised when trying to access the default camera of a robot that does not have a
+    default camera.
     """
 
-    robot: Type[AbstractRobot]
+    robot: type[AbstractRobot]
     """
     The robot that does not have a default camera.
     """
@@ -964,9 +1724,163 @@ class MissingDefaultCameraError(UsageError):
 
 
 @dataclass
+class NoLaserScanReceived(UsageError):
+    """
+    Raised when reading a lidar that has not received a scan yet.
+    """
+
+    topic_name: str
+    """
+    The topic the lidar is waiting for a scan on.
+    """
+
+    def error_message(self) -> str:
+        return f"No laser scan has been received on '{self.topic_name}' yet."
+
+    def suggest_correction(self) -> str:
+        return f"check that something publishes on '{self.topic_name}' and that the node has been spun since."
+
+
+@dataclass
+class InputAlreadyAddedError(UsageError):
+    """
+    Raised when an input is added to a loop that already applies it.
+    """
+
+    synchronizer: InputSynchronizer
+    """
+    The input that was added a second time.
+    """
+
+    def error_message(self) -> str:
+        return f"The loop already applies {self.synchronizer}."
+
+    def suggest_correction(self) -> str:
+        return "add every input only once per loop."
+
+
+@dataclass
+class AlreadyTrackedByTfFrameError(UsageError):
+    """
+    Raised when a connection is registered for tf tracking a second time.
+    """
+
+    connection_name: str
+    """
+    The name of the connection that is already tracked.
+    """
+
+    tf_parent_frame: str
+    """
+    The tf parent frame the connection is already tracked with.
+    """
+
+    tf_child_frame: str
+    """
+    The tf child frame the connection is already tracked with.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"Connection '{self.connection_name}' is already tracked with a tf frame: "
+            f"'{self.tf_parent_frame}'<-'{self.tf_child_frame}'"
+        )
+
+    def suggest_correction(self) -> str:
+        return ""
+
+
+@dataclass
+class UnboundMessageTypeError(UsageError):
+    """
+    Raised when a topic subscriber does not name the type of its messages.
+    """
+
+    subscriber_type: type
+    """
+    The subscriber whose message type is unknown.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"'{self.subscriber_type.__name__}' does not name the type of the "
+            f"messages it reads."
+        )
+
+    def suggest_correction(self) -> str:
+        return (
+            f"Declare it in the bases of '{self.subscriber_type.__name__}', as in "
+            f"'LatestMessageSubscriber[Odometry]'."
+        )
+
+
+@dataclass
+class ConnectionCannotBeTrackedByTfFrameError(UsageError):
+    """
+    Raised when a connection without 6 degrees of freedom is registered for tf tracking.
+    """
+
+    connection: Connection
+    """
+    The connection that cannot be tracked.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"Can only sync Connection6DoF with tf, but '{str(self.connection.name)}' is of "
+            f"type '{type(self.connection).__name__}'."
+        )
+
+    def suggest_correction(self) -> str:
+        return ""
+
+
+@dataclass
+class InvalidBeamCount(UsageError):
+    """
+    Raised when deriving a scan pattern from a beam count too small to space beams by.
+    """
+
+    beam_count: int
+    """
+    The beam count that was rejected.
+    """
+
+    def error_message(self) -> str:
+        return f"A scan pattern cannot be derived from {self.beam_count} beams."
+
+    def suggest_correction(self) -> str:
+        return "give at least two beams, or state the angle increment directly."
+
+
+@dataclass
+class InvalidScanPattern(UsageError):
+    """
+    Raised when a scan pattern describes a sweep a scanner cannot perform.
+    """
+
+    pattern: ScanPattern
+    """
+    The pattern that was rejected.
+    """
+
+    reason: str
+    """
+    What about the pattern is wrong.
+    """
+
+    def error_message(self) -> str:
+        return f"Invalid scan pattern {self.pattern}: {self.reason}."
+
+    def suggest_correction(self) -> str:
+        return ""
+
+
+@dataclass
 class MissingWorldError(UsageError):
     """
-    Raised when trying to access a world that is None, but a world is required for the operation.
+    Raised when trying to access a world that is None, but a world is required for the
+    operation.
     """
 
     def error_message(self) -> str:
@@ -994,7 +1908,7 @@ class WorldEntityWithIDNotFoundError(WorldEntityNotFoundError):
 @dataclass
 class AlreadyBelongsToAWorldError(UsageError):
     world: World
-    type_trying_to_add: Type[WorldEntity]
+    type_trying_to_add: type[WorldEntity]
 
     def error_message(self) -> str:
         return (
@@ -1009,7 +1923,8 @@ class AlreadyBelongsToAWorldError(UsageError):
 @dataclass
 class DoesNotBelongToAWorldError(UsageError):
     """
-    Raised when trying to use a world entity that does not belong to any world in a context where it must belong to a world.
+    Raised when trying to use a world entity that does not belong to any world in a
+    context where it must belong to a world.
     """
 
     world_entity: WorldEntity
@@ -1028,43 +1943,50 @@ class DoesNotBelongToAWorldError(UsageError):
         )
 
 
-class NotJsonSerializable(JSONSerializationError): ...
-
-
 @dataclass
-class SpatialTypeNotJsonSerializable(NotJsonSerializable):
-    spatial_object: SymbolicMathType
+class WorldEntityWithIDNotInKwargs(UntrackedObjectError):
+    """
+    Raised when a JSON document refers to a world entity that was neither deserialized
+    from it nor is part of the world it is deserialized into.
+    """
+
+    key: UUID
+    """
+    The id of the world entity the document refers to.
+    """
+
+    world_entity_name: PrefixedName | None = None
+    """
+    The name the reference to that entity went by when it was written.
+
+    Says which entity is meant where the id alone says nothing. ``None``
+    where the reference carries no name, and never used to look an
+    entity up: the id is its identity.
+    """
 
     def error_message(self) -> str:
-        return (
-            f"Object of type '{self.spatial_object.__class__.__name__}' is not JSON serializable, because it has "
-            f"free variables: {self.spatial_object.free_variables()}"
+        named_entity = (
+            f"World entity '{self.world_entity_name}' ({self.key})"
+            if self.world_entity_name is not None
+            else f"World entity '{self.key}'"
         )
-
-    def suggest_correction(self) -> str:
-        return ""
-
-
-@dataclass
-class WorldEntityWithIDNotInKwargs(JSONSerializationError):
-    world_entity_id: UUID
-
-    def error_message(self) -> str:
-        return (
-            f"World entity '{self.world_entity_id}' is not in the kwargs of the "
-            f"method that created it."
-        )
+        return f"{named_entity} is not in the kwargs of the method that created it."
 
     def suggest_correction(self) -> str:
         return ""
 
 
 class AmbiguousNameError(ValueError):
-    """Raised when more than one semantic annotation class matches a given name with the same score."""
+    """
+    Raised when more than one semantic annotation class matches a given name with the
+    same score.
+    """
 
 
 class UnresolvedNameError(ValueError):
-    """Raised when no semantic annotation class matches a given name."""
+    """
+    Raised when no semantic annotation class matches a given name.
+    """
 
 
 @dataclass
@@ -1073,8 +1995,10 @@ class RootNodeNotFoundError(DataclassException):
     Raised when the root node cannot be found or is ambiguous in a scene graph.
     """
 
-    candidates: List[str]
-    """The candidate node names that were considered as potential roots."""
+    candidates: list[str]
+    """
+    The candidate node names that were considered as potential roots.
+    """
 
     def error_message(self) -> str:
         return f"Could not determine unique root node. Candidates: {self.candidates}"
@@ -1131,11 +2055,44 @@ class BodyHasNoGeometryError(InvalidCollisionCheckError):
 
 
 @dataclass
+class TemporaryCollisionRulesDependOnOrder(CollisionCheckingError):
+    """
+    Raised when temporary collision rules are put in force next to others, and which
+    body pairs are checked at which distance would depend on which of them came first.
+    """
+
+    rules_in_force: list[CollisionRule]
+    """
+    The temporary rules that were in force already.
+    """
+
+    added_rules: list[CollisionRule]
+    """
+    The temporary rules that were to be put in force next to them.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"The temporary collision rules {self.added_rules} and the ones already "
+            f"in force, {self.rules_in_force}, decide differently about the same "
+            f"body pairs, so the outcome would depend on which were added first."
+        )
+
+    def suggest_correction(self) -> str:
+        return (
+            "Put rules that overrule each other in force together, in the order "
+            "they are meant to apply, or do not let them be in force at once."
+        )
+
+
+@dataclass
 class AtomicWorldModificationNotAtomic(DataclassException):
     """
     Exception raised when atomic world modifications are overlapping.
-    If this exception is raised, it means that somewhere in the code a function decorated with @atomic_world_modification
-    triggered another function decorated with it. This must not happen ever!
+
+    If this exception is raised, it means that somewhere in the code a function
+    decorated with @atomic_world_modification triggered another function decorated with
+    it. This must not happen ever!
     """
 
     modification: Callable
@@ -1166,10 +2123,11 @@ class AtomicWorldModificationNotAtomic(DataclassException):
 @dataclass
 class PointOccupiedError(DataclassException):
     """
-    Error that is raised when a pose is occupied or not in the search space of a Connectivity Graphs.
+    Error that is raised when a pose is occupied or not in the search space of a
+    Connectivity Graphs.
     """
 
-    point: Point3
+    point: Point
     """
     The point that is occupied.
     """
@@ -1183,7 +2141,9 @@ class PointOccupiedError(DataclassException):
 
 @dataclass
 class MultiSimError(DataclassException):
-    """Base class for all MultiSim-related exceptions."""
+    """
+    Base class for all MultiSim-related exceptions.
+    """
 
 
 @dataclass
@@ -1232,3 +2192,474 @@ class MujocoEntityNotFoundError(MujocoError):
 
     def suggest_correction(self) -> str:
         return ""
+
+
+@dataclass
+class VideoRecordingError(MultiSimError):
+    """
+    Base class for all
+    :class:`~semantic_digital_twin.adapters.mujoco_video_recording.MujocoVideoRecorder`
+    exceptions.
+    """
+
+
+@dataclass
+class VideoRecordingAlreadyStartedError(VideoRecordingError):
+    """
+    Raised when
+    :meth:`~semantic_digital_twin.adapters.mujoco_video_recording.MujocoVide
+    oRecorder.start`
+    is called on a recorder that is already recording.
+    """
+
+    world: World
+    """
+    The world the recorder is already recording.
+    """
+
+    def error_message(self) -> str:
+        return f"Video recording for {self.world} was already started."
+
+    def suggest_correction(self) -> str:
+        return "call stop() before starting a new recording."
+
+
+@dataclass
+class VideoRecordingNotStartedError(VideoRecordingError):
+    """
+    Raised when
+    :meth:`~semantic_digital_twin.adapters.mujoco_video_recording.MujocoVide
+    oRecorder.stop`
+    is called on a recorder that was never started.
+    """
+
+    world: World
+    """
+    The world the recorder was supposed to be recording.
+    """
+
+    def error_message(self) -> str:
+        return f"Video recording for {self.world} was never started."
+
+    def suggest_correction(self) -> str:
+        return "call start() before stop()."
+
+
+@dataclass
+class EmptyWorldVideoRecordingError(VideoRecordingError):
+    """
+    Raised when a default overview camera cannot be computed because the world has no
+    geometry to frame.
+    """
+
+    world: World
+    """
+    The world that has no geometry.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"Cannot compute an overview camera for {self.world}: it has no geometry."
+        )
+
+    def suggest_correction(self) -> str:
+        return "add at least one body with geometry to the world, or pass an explicit camera."
+
+
+@dataclass
+class EmptyVideoRecordingError(VideoRecordingError):
+    """
+    Raised when
+    :meth:`~semantic_digital_twin.adapters.mujoco_video_recording.RecordedVideo.write`
+    is called on a recording that has no frames.
+    """
+
+    output_path: Path
+    """
+    The path the (empty) video was supposed to be written to.
+    """
+
+    def error_message(self) -> str:
+        return f"Cannot write a video to {self.output_path}: no frames were captured."
+
+    def suggest_correction(self) -> str:
+        return "call start() and let the recorder run for at least one frame period before stop()."
+
+
+@dataclass
+class InvalidVideoRecordingRateError(VideoRecordingError):
+    """
+    Raised when a
+    :class:`~semantic_digital_twin.adapters.mujoco_video_recording.MujocoVideoRecorder`
+    is configured with a non-positive rate.
+    """
+
+    field_name: str
+    """
+    The name of the misconfigured field.
+    """
+
+    value: int
+    """
+    The non-positive value that was given.
+    """
+
+    def error_message(self) -> str:
+        return f"{self.field_name} must be positive, got {self.value}."
+
+    def suggest_correction(self) -> str:
+        return "use a positive integer."
+
+
+@dataclass
+class MergedRobotAnnotationNotFound(UsageError):
+    """
+    Raised when merging a robot into a world produced no semantic annotation for the
+    branch the robot was annotated on.
+    """
+
+    annotation_type_name: str
+    """
+    The name of the robot annotation type that was expected in the merged world.
+    """
+
+    annotation_root_id: UUID
+    """
+    The identifier of the annotated robot's root entity.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"The merged world holds no '{self.annotation_type_name}' annotation rooted "
+            f"at the entity '{self.annotation_root_id}'."
+        )
+
+    def suggest_correction(self) -> str:
+        return (
+            "check that merging the robot world replays its semantic annotations into "
+            "the target world."
+        )
+
+
+@dataclass
+class ConnectionsOutsideEndEffector(UsageError):
+    """
+    Raised when a gripper specification's joint state moves connections that do not
+    belong to the specification's end effector.
+    """
+
+    end_effector: EndEffector
+    """
+    The end effector the specification was built for.
+    """
+
+    foreign_connection_names: list[str]
+    """
+    The names of the connections in the joint state that are not active connections of
+    the end effector.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"The joint state moves connections that do not belong to the end effector "
+            f"'{self.end_effector.name}': {self.foreign_connection_names}."
+        )
+
+    def suggest_correction(self) -> str:
+        return (
+            "build the specification from a joint state whose connections are all "
+            "active connections of the same end effector."
+        )
+
+
+@dataclass
+class ExerciseVerificationFailed(UsageError):
+    """
+    Raised when a solution written in a self-assessment exercise does not satisfy one of
+    the exercise's requirements.
+    """
+
+    requirement: str
+    """
+    The requirement that the solution failed to satisfy.
+    """
+
+    def error_message(self) -> str:
+        return f"Your solution does not satisfy this requirement: {self.requirement}"
+
+    def suggest_correction(self) -> str:
+        return "revisit the task description of this exercise and adjust your solution."
+
+
+@dataclass
+class DriveVelocityLimitsOnUndrivenRobot(UsageError):
+    """
+    Raised when drive velocity limits are given for a robot that is attached to its
+    localization frame rigidly rather than by a drive.
+    """
+
+    robot_type_name: str
+    """
+    The name of the robot type the limits were given for.
+    """
+
+    connection_type_name: str
+    """
+    The name of the connection type that robot attaches to its localization frame with.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"'{self.robot_type_name}' attaches to its localization frame with a "
+            f"'{self.connection_type_name}', which carries no velocity limits."
+        )
+
+    def suggest_correction(self) -> str:
+        return (
+            "leave the drive velocity limits unset, or give the robot a mobile base "
+            "whose drive can carry them."
+        )
+
+
+@dataclass
+class NothingHeld(UsageError):
+    """
+    Raised when the grasp of a gripper that holds nothing is asked for.
+    """
+
+    end_effector: EndEffector
+    """
+    The end effector that holds nothing.
+    """
+
+    def error_message(self) -> str:
+        return f"The end effector '{self.end_effector.name}' holds no body."
+
+    def suggest_correction(self) -> str:
+        return (
+            "check that a body is attached below the end effector's tool frame before "
+            "reading the grasp it is held by."
+        )
+
+
+@dataclass
+class NoGraspGeometry(UsageError):
+    """
+    Raised when an object's grasps are derived from its shape, but its root body has no
+    shape to derive them from.
+    """
+
+    graspable: HasGraspCandidates
+    """
+    The annotation whose grasps were asked for.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"The grasps of '{self.graspable.name}' follow its shape, but its root body "
+            f"'{self.graspable.root.name}' offers none to follow."
+        )
+
+    def suggest_correction(self) -> str:
+        return (
+            "give the root body collision geometry, or annotate the object with a type "
+            "whose grasps do not depend on its shape."
+        )
+
+
+@dataclass
+class SurfaceGraspNotOnSurfaceError(UsageError):
+    """
+    Raised when a surface grasp names a point the object's grasp surface does not reach.
+    """
+
+    surface_grasp: SurfaceGrasp
+    """
+    The grasp that missed.
+    """
+
+    graspable: HasGraspCandidates
+    """
+    The object it was meant for.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"No surface of '{self.graspable.name}' lies at azimuth "
+            f"{self.surface_grasp.azimuth:.3f} rad and height "
+            f"{self.surface_grasp.height:.3f} of its bounding box."
+        )
+
+    def suggest_correction(self) -> str:
+        return (
+            "keep the height of a surface grasp between 0 and 1, and check with "
+            "SurfaceGrasp.reaches_surface_of before asking for its grasp candidate."
+        )
+
+
+@dataclass
+class GripperAxesNotPerpendicular(UsageError):
+    """
+    Raised when a gripper's closing axis is not perpendicular to its approach axis, so
+    the two cannot span a grasp frame.
+    """
+
+    end_effector: EndEffector
+    """
+    The end effector stating the axes.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"The end effector '{self.end_effector.name}' has an approach axis "
+            f"{self.end_effector.approach_axis.to_np()[:3].tolist()} and a closing axis "
+            f"{self.end_effector.closing_axis.to_np()[:3].tolist()} that are not "
+            f"perpendicular."
+        )
+
+    def suggest_correction(self) -> str:
+        return (
+            "return a closing axis at a right angle to the approach axis, both in the "
+            "tool frame."
+        )
+
+
+@dataclass
+class MoreThanOneBodyHeld(UsageError):
+    """
+    Raised when a gripper's tool frame has more than one body attached to it.
+    """
+
+    end_effector: EndEffector
+    """
+    The end effector whose tool frame carries them.
+    """
+
+    held_bodies: list[KinematicStructureEntity]
+    """
+    The entities attached to that tool frame.
+    """
+
+    def error_message(self) -> str:
+        names = [str(body.name) for body in self.held_bodies]
+        return (
+            f"The end effector '{self.end_effector.name}' has more than one body "
+            f"attached to its tool frame: {names}."
+        )
+
+    def suggest_correction(self) -> str:
+        return (
+            "detach everything but the grasped body from the tool frame, so that the "
+            "body the gripper holds is unambiguous."
+        )
+
+
+@dataclass
+class NoSupportingSurfaceError(UsageError):
+    """
+    Raised when an annotation's geometry offers no surface anything could be supported
+    on.
+    """
+
+    annotation: HasSupportingSurface
+    """
+    The annotation that was asked for its supporting surface.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"'{self.annotation.root.name}' has no supporting surface and none could "
+            f"be derived from its geometry."
+        )
+
+    def suggest_correction(self) -> str:
+        return (
+            "attach a supporting surface region to the annotation, or give its root "
+            "body geometry with an upward facing face."
+        )
+
+
+@dataclass
+class DuplicateSimulatorPropertyError(UsageError):
+    """
+    Raised when an entity carries more than one simulator property of a type of which a
+    simulator reads exactly one.
+    """
+
+    property_type: type
+    """
+    The type of property attached more than once.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"The entity already carries a {self.property_type.__name__} simulator "
+            "property."
+        )
+
+    def suggest_correction(self) -> str:
+        return (
+            "Modify the existing property in place instead of attaching a second one; "
+            "HasSimulatorProperties.get_simulator_property_of_type returns it."
+        )
+
+
+@dataclass
+class SimulationNotStartedError(UsageError):
+    """
+    Raised when a simulation is advanced before it was started.
+    """
+
+    world_name: str
+    """
+    Name of the root of the world whose simulation was advanced too early.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"The simulation of the world rooted at {self.world_name} has to be started "
+            "before it can be advanced."
+        )
+
+    def suggest_correction(self) -> str:
+        return "Call start() first, or drive the simulation inside a with block."
+
+
+@dataclass
+class SimulationAlreadyRunningError(UsageError):
+    """
+    Raised when a simulation is started while it is already running.
+    """
+
+    world_name: str
+    """
+    Name of the root of the world whose simulation was started twice.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"The simulation of the world rooted at {self.world_name} is already "
+            "running."
+        )
+
+    def suggest_correction(self) -> str:
+        return "Stop the simulation before starting it again."
+
+
+@dataclass
+class ObjectHasNoWidthWithoutCollision(UsageError):
+    """
+    Raised when the width of an object is asked for, while the object carries no
+    collision geometry to measure.
+    """
+
+    object_name: PrefixedName
+    """
+    Name of the body whose width was asked for.
+    """
+
+    def error_message(self) -> str:
+        return f"{self.object_name} has no collision geometry to measure a width on."
+
+    def suggest_correction(self) -> str:
+        return "Give the body collision geometry, or state the width yourself."

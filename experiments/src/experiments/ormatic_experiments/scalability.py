@@ -1,8 +1,9 @@
 """
-This module provides functions and dataclass definitions for conducting
-scalability experiments with the ORMatic library. It includes tools for
-collecting mappable classes, alternative mappings, and type mappings, as well
-as computing timing and structural statistics across multiple ORMatic
+This module provides functions and dataclass definitions for conducting scalability
+experiments with the ORMatic library.
+
+It includes tools for collecting mappable classes, alternative mappings, and type
+mappings, as well as computing timing and structural statistics across multiple ORMatic
 generation runs.
 """
 
@@ -12,13 +13,12 @@ import time
 import tempfile
 from contextlib import contextmanager
 from dataclasses import is_dataclass, dataclass
-from typing import Type, List, Set, Tuple
 
 import plotly.graph_objects as go
 import tqdm
 
 import coraplex.orm.ormatic_interface  # type: ignore
-import coraplex.plans.plan_node
+from cramph.composites import StatementNode
 import semantic_digital_twin  # type: ignore
 from experiments.experiment_definitions import (
     ExperimentResult,
@@ -26,31 +26,34 @@ from experiments.experiment_definitions import (
     MeanAndStandardDeviation,
     TypstRenderer,
 )
-from krrood.class_diagrams import ClassDiagram
+from krrood.class_diagrams.class_diagram import ClassDiagram
 from krrood.ormatic.data_access_objects.alternative_mappings import AlternativeMapping
-from krrood.ormatic.helper import get_classes_of_ormatic_interface
+from krrood.ormatic.helper import (
+    get_classes_of_ormatic_interface,
+    OrmaticInterfaceInformation,
+)
 from krrood.ormatic.ormatic import ORMatic
 from krrood.ormatic.type_dict import TypeDict
 from krrood.utils import recursive_subclasses
-from coraplex.robot_plans.actions.base import ActionDescription
+from coraplex.robot_plans.actions.base import Action
 
 
-def build_cram_class_sets() -> Tuple[Set[Type], List[Type], dict]:
+def build_cram_class_sets() -> tuple[set[type], list[type], dict]:
     """
-    Collect all mappable classes, alternative mappings, and type mappings from
-    the coraplex ORM interface.
+    Collect all mappable classes, alternative mappings, and type mappings from the
+    coraplex ORM interface.
 
     Filters out non-dataclasses and AlternativeMapping subclasses from the raw
     interface, then augments with the original classes of every registered
     AlternativeMapping so the full set is consistent.
 
-    :return: Tuple of (classes, alternative_mappings, type_mappings) ready to
-             pass to :func:`run_scalability_experiment`.
+    :return: Tuple of (classes, alternative_mappings, type_mappings) ready to pass to
+        :func:`run_scalability_experiment`.
     """
-    classes, alternative_mappings, type_mappings = get_classes_of_ormatic_interface(
-        coraplex.orm.ormatic_interface
-    )
-    classes = set(classes)
+    interface_info = get_classes_of_ormatic_interface(coraplex.orm.ormatic_interface)
+    classes = set(interface_info.classes)
+    alternative_mappings = interface_info.alternative_mappings
+    type_mappings = interface_info.type_mappings
 
     alternative_mappings += [
         alternative_mapping
@@ -74,54 +77,97 @@ class ORMaticScalabilityExperimentResult(ExperimentResult):
     """
     Raw measurements from a single ORMatic generation run.
 
-    All durations are in seconds, rounded to two decimal places.
-    Structural counts reflect the class diagram that was actually built for
-    the given filtered class set.
+    All durations are in seconds, rounded to two decimal places. Structural counts
+    reflect the class diagram that was actually built for the given filtered class set.
     """
 
     total_duration: float
-    """Wall-clock time from ClassDiagram creation to file write completion."""
+    """
+    Wall-clock time from ClassDiagram creation to file write completion.
+    """
+
     class_diagram_creation_duration: float
-    """Time spent constructing the ClassDiagram."""
+    """
+    Time spent constructing the ClassDiagram.
+    """
+
     ormatic_reasoning_duration: float
-    """Time spent in ORMatic.make_all_tables()."""
+    """
+    Time spent in ORMatic.make_all_tables().
+    """
+
     writing_to_file_duration: float
-    """Time spent serialising the generated SQLAlchemy code to a temp file."""
+    """
+    Time spent serialising the generated SQLAlchemy code to a temp file.
+    """
+
     number_of_classes: int
-    """Number of classes in the filtered input set."""
+    """
+    Number of classes in the filtered input set.
+    """
+
     number_of_associations: int
-    """Number of association edges in the resulting class diagram."""
+    """
+    Number of association edges in the resulting class diagram.
+    """
+
     number_of_inheritances: int
-    """Number of inheritance edges in the resulting class diagram."""
+    """
+    Number of inheritance edges in the resulting class diagram.
+    """
 
 
 @dataclass
 class ORMaticScalabilityAggregateResult(ExperimentResult):
     """
-    Aggregated statistics over multiple ORMatic generation runs at a fixed drop probability.
+    Aggregated statistics over multiple ORMatic generation runs at a fixed drop
+    probability.
 
-    Every numeric field is a :class:`MeanAndStandardDeviation` computed across
-    all iterations of :func:`run_scalability_experiment`.  Structural counts
-    (classes, associations, inheritances) vary between iterations because the
-    class subset is resampled each time.
+    Every numeric field is a :class:`MeanAndStandardDeviation` computed across all
+    iterations of :func:`run_scalability_experiment`.  Structural counts (classes,
+    associations, inheritances) vary between iterations because the class subset is
+    resampled each time.
     """
 
     class_drop_probability: float
-    """Fraction of classes randomly excluded from each iteration's input set."""
+    """
+    Fraction of classes randomly excluded from each iteration's input set.
+    """
+
     number_of_classes: MeanAndStandardDeviation
-    """Statistics over the size of the filtered class set across iterations."""
+    """
+    Statistics over the size of the filtered class set across iterations.
+    """
+
     number_of_associations: MeanAndStandardDeviation
-    """Statistics over association edge count across iterations."""
+    """
+    Statistics over association edge count across iterations.
+    """
+
     number_of_inheritances: MeanAndStandardDeviation
-    """Statistics over inheritance edge count across iterations."""
+    """
+    Statistics over inheritance edge count across iterations.
+    """
+
     total_duration: MeanAndStandardDeviation
-    """Statistics over total generation time (s) across iterations."""
+    """
+    Statistics over total generation time (s) across iterations.
+    """
+
     class_diagram_creation_duration: MeanAndStandardDeviation
-    """Statistics over ClassDiagram construction time (s) across iterations."""
+    """
+    Statistics over ClassDiagram construction time (s) across iterations.
+    """
+
     ormatic_reasoning_duration: MeanAndStandardDeviation
-    """Statistics over ORMatic reasoning time (s) across iterations."""
+    """
+    Statistics over ORMatic reasoning time (s) across iterations.
+    """
+
     writing_to_file_duration: MeanAndStandardDeviation
-    """Statistics over file serialisation time (s) across iterations."""
+    """
+    Statistics over file serialisation time (s) across iterations.
+    """
 
 
 @contextmanager
@@ -136,16 +182,16 @@ def _silence_ormatic_logger():
 
 
 def ormatic_scalability_experiment(
-    filtered_classes: Set[Type],
-    alternative_mappings: List[Type],
+    filtered_classes: set[type],
+    alternative_mappings: list[type],
     type_mappings: dict,
 ) -> ORMaticScalabilityExperimentResult:
     """
-    Run a single ORMatic generation pass over a pre-determined class set and
-    return timing and structural measurements.
+    Run a single ORMatic generation pass over a pre-determined class set and return
+    timing and structural measurements.
 
-    ORMatic log output is suppressed for the duration of the run to keep
-    benchmark output readable.
+    ORMatic log output is suppressed for the duration of the run to keep benchmark
+    output readable.
 
     :param filtered_classes: The exact set of classes to map in this run.
     :param alternative_mappings: AlternativeMapping subclasses to register with ORMatic.
@@ -159,8 +205,8 @@ def ormatic_scalability_experiment(
 
 
 def _ormatic_scalability_experiment(
-    filtered_classes: Set[Type],
-    alternative_mappings: List[Type],
+    filtered_classes: set[type],
+    alternative_mappings: list[type],
     type_mappings: dict,
 ) -> ORMaticScalabilityExperimentResult:
     """
@@ -184,8 +230,10 @@ def _ormatic_scalability_experiment(
 
     ormatic = ORMatic(
         class_diagram,
-        type_mappings=TypeDict(type_mappings),
-        alternative_mappings=alternative_mappings,
+        interface_information=OrmaticInterfaceInformation(
+            type_mappings=TypeDict(type_mappings),
+            alternative_mappings=alternative_mappings,
+        ),
     )
     ormatic.make_all_tables()
 
@@ -212,21 +260,21 @@ def _ormatic_scalability_experiment(
 
 
 def run_scalability_experiment(
-    classes: List[Type],
-    alternative_mappings: List[Type],
+    classes: list[type],
+    alternative_mappings: list[type],
     type_mappings: dict,
     class_drop_probability: float = 0.3,
     iterations: int = 10,
-    required_classes: List[Type] | None = None,
+    required_classes: list[type] | None = None,
 ) -> ORMaticScalabilityAggregateResult:
     """
     Repeatedly sample a random subset of classes and run the ORMatic generation
     pipeline, then aggregate timing and structural measurements across all runs.
 
     Each iteration independently resamples the class subset so that the reported
-    standard deviations reflect variability from both class-set composition and
-    runtime noise.  AlternativeMapping original classes and any ``required_classes``
-    are always present in every iteration's input, regardless of the drop probability.
+    standard deviations reflect variability from both class-set composition and runtime
+    noise.  AlternativeMapping original classes and any ``required_classes`` are always
+    present in every iteration's input, regardless of the drop probability.
 
     :param classes: Full pool of candidate classes to sample from.
     :param alternative_mappings: AlternativeMapping subclasses to register with ORMatic.
@@ -283,17 +331,17 @@ def plot_scalability(table: ExperimentsTable) -> go.Figure:
     """
     Produce a band plot of number of classes (x) vs mean total runtime (y).
 
-    The shaded band covers mean ± 1 standard deviation of the total duration.
-    The x-axis uses the mean number of classes from each
-    :class:`ORMaticScalabilityAggregateResult` row in ``table``.
+    The shaded band covers mean ± 1 standard deviation of the total duration. The x-axis
+    uses the mean number of classes from each :class:`ORMaticScalabilityAggregateResult`
+    row in ``table``.
 
     :param table: An :class:`ExperimentsTable` whose rows are
-                  :class:`ORMaticScalabilityAggregateResult` instances, typically
-                  produced by calling :func:`run_scalability_experiment` at
-                  several different drop probabilities.
+        :class:`ORMaticScalabilityAggregateResult` instances, typically produced by
+        calling :func:`run_scalability_experiment` at several different drop
+        probabilities.
     :return: A Plotly figure ready for display or export.
     """
-    rows: List[ORMaticScalabilityAggregateResult] = table.experiments
+    rows: list[ORMaticScalabilityAggregateResult] = table.experiments
 
     x = [r.number_of_classes.mean for r in rows]
     y = [r.total_duration.mean for r in rows]
@@ -334,7 +382,7 @@ def plot_scalability(table: ExperimentsTable) -> go.Figure:
 
 def main():
     classes, alternative_mappings, type_mappings = build_cram_class_sets()
-    required_classes = [coraplex.plans.plan_node.UnderspecifiedNode, ActionDescription]
+    required_classes = [StatementNode, Action]
     results = []
     for class_drop_probability in tqdm.tqdm(
         [

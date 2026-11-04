@@ -1,5 +1,6 @@
 """
-This script defines a Robokudo-based behavior tree pipeline for processing queries related to numbers.
+This script defines a Robokudo-based behavior tree pipeline for processing queries
+related to numbers.
 
 Features:
 - Implements a PyTrees behavior tree to handle query processing.
@@ -18,7 +19,6 @@ from py_trees.composites import Selector
 from py_trees.composites import Sequence
 from py_trees.decorators import Inverter
 from robokudo_msgs.action import Query
-from typing_extensions import List
 
 from robokudo.analysis_engine import AnalysisEngineInterface
 from robokudo.annotators.core import BaseAnnotator
@@ -35,7 +35,7 @@ class PrintNumbers(BaseAnnotator):
         super().__init__(name)
         self.current_number: int = 1
         self.completed: bool = False
-        self.result: List[int] = []
+        self.result: list[int] = []
         self.result_string: str = ""
 
     def initialise(self) -> None:

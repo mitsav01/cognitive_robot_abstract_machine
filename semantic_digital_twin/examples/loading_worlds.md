@@ -23,10 +23,11 @@ First, we need to compose the path to your world file.
 import logging
 import os
 
-from pkg_resources import resource_filename
+from importlib.resources import files
+from pathlib import Path
 
 logging.disable(logging.CRITICAL)
-apartment = os.path.join(resource_filename("semantic_digital_twin", "../../"), "resources", "urdf", "apartment.urdf")
+apartment = os.path.join(Path(files("semantic_digital_twin")).parent.parent, "resources", "urdf", "apartment.urdf")
 
 ```
 
@@ -38,7 +39,7 @@ inside your ROS2 workspace.
 from semantic_digital_twin.adapters.urdf import URDFParser  
   
 parser = URDFParser.from_file(apartment)  
-world = parser.parse()  
+world = parser.create_world()  
 ```
 
 This constructs a world you can visualize, interact and annotate. Be aware that worlds loaded from files have no semantic annotations and serve as purely kinematic models.

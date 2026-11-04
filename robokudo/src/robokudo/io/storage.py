@@ -17,10 +17,13 @@ The module handles:
 """
 
 from __future__ import annotations
+
+# %% Imports
 import os
+from enum import StrEnum
 
 from pymongo import MongoClient
-from typing_extensions import Any, Dict, List, Optional, TYPE_CHECKING, Tuple
+from typing_extensions import Any, TYPE_CHECKING
 from robokudo import world
 
 from robokudo.cas import CAS
@@ -29,21 +32,49 @@ from robokudo.io.cas_annotation_codecs import (
     deserialize_annotations,
 )
 from robokudo.io.cas_view_codecs import CASViewCodecRegistry
+from robokudo.io.exceptions import (
+    RecordedViewMissing,
+    CASViewCodecMissing,
+    ViewStorageFailed,
+    RecordedViewNameMismatch,
+)
 
 if TYPE_CHECKING:
     from pymongo.results import InsertOneResult
     from pymongo.synchronous.database import Database
 
 
+class StorageDocumentField(StrEnum):
+    """
+    Identify fields shared by recorded CAS documents.
+    """
+
+    WORLD = "world"
+    """
+    Full semantic-world snapshot at the recorded frame.
+    """
+
+    VIEW_IDS = "view_ids"
+    """
+    References to persisted CAS view documents.
+    """
+
+    VIEWS = "views"
+    """
+    Decoded CAS views attached during playback.
+    """
+
+
 class Storage:
-    """Main interface between RoboKudo and MongoDB.
+    """
+    Main interface between RoboKudo and MongoDB.
 
     This class holds the main interface code between RoboKudo and the MongoDB database.
     It stores sensor data and CAS views by converting specialized types (NumPy arrays,
     ROS messages, etc.) into a BSON‑encodable dictionary format.
     """
 
-    BLACKLISTED_TYPES: Tuple[type, ...] = (type(lambda x: x),)
+    BLACKLISTED_TYPES: tuple[type, ...] = (type(lambda x: x),)
     VIEW_COLLECTION_NAME: str = "cas_views"
     cas_view_codecs = CASViewCodecRegistry()
 
@@ -62,8 +93,8 @@ class Storage:
         """
         Create a MongoDB client instance.
 
-        Uses environment variables RK_MONGO_HOST and RK_MONGO_PORT if set,
-        otherwise defaults to localhost:27017.
+        Uses environment variables RK_MONGO_HOST and RK_MONGO_PORT if set, otherwise
+        defaults to localhost:27017.
 
         :return: MongoDB client instance
         """
@@ -75,80 +106,39 @@ class Storage:
 
         return MongoClient(host=mongo_host, port=mongo_port)
 
-    @DeprecationWarning  # Use ListReader instead for better pymongo compatibility across versions
-    class Reader:
-        """
-        Deprecated cursor-based MongoDB reader.
-
-        .. deprecated:: Use ListReader instead for better pymongo compatibility
-        """
-
-        def __init__(self, db_name: str) -> None:
-            """Initialize the reader.
-
-            :param db_name: Name of the MongoDB database
-            """
-            client = Storage.instantiate_mongo_client()
-
-            self.db_reader = client[db_name]
-            self.reset_cursor()
-
-        def reset_cursor(self) -> None:
-            """Reset the cursor to the start of the collection."""
-            self.cursor = self.db_reader.cas.find()
-
-        def collection_has_frames(self) -> bool:
-            """Check if collection has any frames.
-
-            :return: True if frames exist, False otherwise
-            """
-            return self.db_reader.cas.find().alive
-
-        def cursor_has_frames(self) -> bool:
-            """Check if cursor has more frames.
-
-            :return: True if more frames exist, False otherwise
-            """
-            return self.cursor.alive
-
-        def get_next_frame(self) -> Optional[dict]:
-            """
-            Get the next frame from the cursor.
-
-            :return: Next frame data or None if no more frames
-            """
-            if not self.cursor_has_frames():
-                return None
-            return self.cursor.next()
-
     class ListReader:
-        """List-based MongoDB reader.
+        """
+        List-based MongoDB reader.
 
-        This class reads all matching records into a list for iteration,
-        providing better compatibility across pymongo versions and simpler
-        cursor management.
+        This class reads all matching records into a list for iteration, providing
+        better compatibility across pymongo versions and simpler cursor management.
         """
 
         def __init__(self, db_name: str) -> None:
-            """Initialize the list reader.
+            """
+            Initialize the list reader.
 
             :param db_name: Name of the MongoDB database
             """
             client = Storage.instantiate_mongo_client()
 
             self.db_reader = client[db_name]
-            """MongoDB database instance"""
-
-            self.index: Optional[int] = None
-            """Current position in data list"""
-
-            self.data: List[Dict[Any, Any]] = []
-            """List of loaded documents"""
-
+            """
+            MongoDB database instance.
+            """
+            self.index: int | None = None
+            """
+            Current position in data list.
+            """
+            self.data: list[dict[Any, Any]] = []
+            """
+            List of loaded documents.
+            """
             self.reset_cursor()
 
         def reset_cursor(self) -> None:
-            """Reset the reader state.
+            """
+            Reset the reader state.
 
             Clears and reloads all documents from the database.
             """
@@ -158,14 +148,16 @@ class Storage:
             self.index = 0 if self.data else None
 
         def cursor_has_frames(self) -> bool:
-            """Check if more frames are available.
+            """
+            Check if more frames are available.
 
             :return: True if more frames exist, False otherwise
             """
             return self.index is not None and self.index < len(self.data)
 
-        def get_next_frame(self) -> Optional[Dict[Any, Any]]:
-            """Get the next frame from the data list.
+        def get_next_frame(self) -> dict[Any, Any] | None:
+            """
+            Get the next frame from the data list.
 
             :return: Next frame data or None if no more frames
             """
@@ -176,48 +168,62 @@ class Storage:
             return data
 
     def __init__(self, db_name: str) -> None:
-        """Initialize the storage interface.
+        """
+        Initialize the storage interface.
 
         :param db_name: Name of the MongoDB database
         """
-
         self.db_name = db_name
-        """Name of the MongoDB database"""
-
+        """
+        Name of the MongoDB database.
+        """
         self.client: MongoClient = Storage.instantiate_mongo_client()
-        """MongoDB client connection"""
-
+        """
+        MongoDB client connection.
+        """
         self.db: Database = self.client[db_name]
-        """MongoDB database instance"""
+        """
+        MongoDB database instance.
+        """
 
     def drop_database(self) -> None:
-        """Drop the entire database."""
+        """
+        Drop the entire database.
+        """
         self.client.drop_database(self.db_name)
 
     @staticmethod
-    def encode_view_document(view_name: str, view_value: Any) -> Dict[str, Any]:
-        """Encode one CAS view value into a serializable view document."""
+    def encode_view_document(view_name: str, view_value: Any) -> dict[str, Any]:
+        """
+        Encode one CAS view value into a serializable view document.
+
+        :param view_name: Name identifying the view in the stored document.
+        :param view_value: View contents to serialize.
+        :return: Encoded view document.
+        :raises CASViewCodecMissing: If no codec accepts the view contents.
+        """
         document = Storage.cas_view_codecs.encode_view(
             view_name=view_name,
             value=view_value,
             strict=True,
         )
         if document is None:
-            raise TypeError(
-                f"No codec registered for view '{view_name}' with type '{type(view_value)}'."
-            )
+            raise CASViewCodecMissing(view_name=view_name, value_type=type(view_value))
         return document
 
     @staticmethod
-    def decode_view_document(view_document: Dict[str, Any]) -> tuple[str, Any]:
-        """Decode one serialized view document into a CAS view value."""
+    def decode_view_document(view_document: dict[str, Any]) -> tuple[str, Any]:
+        """
+        Decode one serialized view document into a CAS view value.
+        """
         return Storage.cas_view_codecs.decode_view(view_document)
 
-    def store_views_in_mongo(self, cas_dict: Dict[str, Any]) -> None:
-        """Store CAS views in MongoDB.
+    def store_views_in_mongo(self, cas_dict: dict[str, Any]) -> None:
+        """
+        Store CAS views in MongoDB.
 
-        Persist CAS views in a dedicated view collection and store references
-        to those view records in ``cas_dict["view_ids"]``.
+        Persist CAS views in a dedicated view collection and store references to those
+        view records in ``cas_dict["view_ids"]``.
 
         :param cas_dict: CAS as a dictionary to persist
         """
@@ -228,48 +234,83 @@ class Storage:
             )
             result = self.db[Storage.VIEW_COLLECTION_NAME].insert_one(view_document)
             if not result.acknowledged:
-                raise RuntimeError(
-                    f'Mongo DB error when trying to store view "{view_name}".'
-                )
+                raise ViewStorageFailed(view_name=view_name)
 
             cas_dict["view_ids"][view_name] = result.inserted_id
 
-    def load_views_from_mongo_in_cas(self, cas_document: Dict[str, Any]) -> None:
-        """Load views from MongoDB into a CAS document.
+    def load_views_from_mongo_in_cas(
+        self,
+        cas_document: dict[str, Any],
+        excluded_view_names: set[str] | None = None,
+        included_view_names: set[str] | None = None,
+    ) -> None:
+        """
+        Load views from MongoDB into a CAS document.
 
-        Retrieve and decode each persisted view referenced in ``view_ids``.
+        Retrieve and decode each persisted view referenced in
+        ``view_ids``.
 
         :param cas_document: CAS document to update with loaded views
+        :param excluded_view_names: View names to leave undecoded for
+            caller-specific handling.
+        :param included_view_names: View names to decode when a reader
+            selects inputs.
         """
-        for expected_view_name, view_id in cas_document["view_ids"].items():
-            view_document = self.db[Storage.VIEW_COLLECTION_NAME].find_one(
-                {"_id": view_id}
-            )
-            if not view_document:
-                raise RuntimeError(
-                    f"Couldn't find view '{expected_view_name}' with id={view_id}."
-                )
+        excluded_view_names = excluded_view_names or set()
+        for expected_view_name, view_id in cas_document[
+            StorageDocumentField.VIEW_IDS
+        ].items():
+            if expected_view_name in excluded_view_names:
+                continue
+            if (
+                included_view_names is not None
+                and expected_view_name not in included_view_names
+            ):
+                continue
+            view_document = self.load_view_document(cas_document, expected_view_name)
             decoded_view_name, decoded_view_value = Storage.decode_view_document(
                 view_document
             )
             if decoded_view_name != expected_view_name:
-                raise RuntimeError(
-                    f"Decoded view name '{decoded_view_name}' does not match expected "
-                    f"view name '{expected_view_name}' for id={view_id}."
+                raise RecordedViewNameMismatch(
+                    expected_name=expected_view_name, recorded_name=decoded_view_name
                 )
-            cas_document["views"][decoded_view_name] = decoded_view_value
+            cas_document[StorageDocumentField.VIEWS][decoded_view_name] = (
+                decoded_view_value
+            )
+
+    def load_view_document(
+        self, cas_document: dict[str, Any], view_name: str
+    ) -> dict[str, Any]:
+        """
+        Fetch one CAS view document referenced by a recorded frame.
+
+        :param cas_document: Recorded frame containing references to stored views.
+        :param view_name: Name of the view to retrieve.
+        :return: Stored document referenced by the frame for the requested view.
+        :raises RecordedViewMissing: If the referenced view document does not exist.
+        """
+        view_id = cas_document[StorageDocumentField.VIEW_IDS][view_name]
+        document = self.db[Storage.VIEW_COLLECTION_NAME].find_one({"_id": view_id})
+        if document is None:
+            raise RecordedViewMissing(view_name=view_name, view_id=view_id)
+        return document
 
     @staticmethod
     def load_annotations_from_mongo_in_cas(
-        cas_document: Dict[str, Any], cas: CAS
+        cas_document: dict[str, Any], cas: CAS
     ) -> None:
-        """Load annotations from MongoDB into a CAS.
+        """
+        Load annotations from MongoDB into a CAS.
 
-        Restore the annotations from the database and insert them into the CAS.
-        If no (pickled) annotations are available, cas will be untouched.
+        Restore the annotations from the database and insert them into
+        the CAS. If no (pickled) annotations are available, cas will be
+        untouched.
 
-        :param cas_document: A dict representing a frame of a CAS in the database
-        :param cas: The 'robokudo.cas.CAS' instance where the annotations shall be inserted to
+        :param cas_document: A dict representing a frame of a CAS in the
+            database
+        :param cas: The 'robokudo.cas.CAS' instance where the
+            annotations shall be inserted to
         """
         if cas_document["annotations"]:
             tracker = world.get_world_entity_tracker()
@@ -279,11 +320,12 @@ class Storage:
             )
 
     @staticmethod
-    def generate_dict_from_real_cas(cas: CAS) -> Dict[str, Any]:
-        """Convert a CAS instance to a MongoDB-compatible dictionary.
+    def generate_dict_from_real_cas(cas: CAS) -> dict[str, Any]:
+        """
+        Convert a CAS instance to a MongoDB-compatible dictionary.
 
-        Generate a dictionary representation from CAS that is ready for storage.
-        All views are validated through the active view codec registry.
+        Generate a dictionary representation from CAS that is ready for storage. All
+        views are validated through the active view codec registry.
 
         :param cas: Input CAS that should be used to create a dict-representation of it.
         :return: A dict with references to parts of the input CAS.
@@ -302,12 +344,11 @@ class Storage:
 
         return result
 
-    def store_cas_dict(self, cas_dict: Dict[str, Any]) -> InsertOneResult:
+    def store_cas_dict(self, cas_dict: dict[str, Any]) -> InsertOneResult:
         """
         Store a CAS dictionary in MongoDB.
 
-        Stores the views and creates a CAS document in MongoDB that references
-        them.
+        Stores the views and creates a CAS document in MongoDB that references them.
 
         :param cas_dict: Dictionary representation of a CAS
         :return: MongoDB ObjectId of the stored CAS document

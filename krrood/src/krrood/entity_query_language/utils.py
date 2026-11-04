@@ -1,29 +1,22 @@
 """
-Utilities for hashing, rendering, and general helpers used by the
-symbolic query engine.
+Utilities for hashing, rendering, and general helpers used by the symbolic query engine.
 """
 
 from __future__ import annotations
 
-import inspect
 import itertools
-from functools import lru_cache
+import re
 
 from typing_extensions import (
-    Set,
     Any,
     TypeVar,
-    List,
-    Dict,
     Callable,
     Iterator,
     Union,
     Type,
-    Tuple,
     TYPE_CHECKING,
     Hashable,
     Iterable,
-    Optional,
 )
 
 if TYPE_CHECKING:
@@ -35,7 +28,8 @@ if TYPE_CHECKING:
 
 class IDGenerator:
     """
-    A class that generates incrementing, unique IDs and caches them for every object this is called on.
+    A class that generates incrementing, unique IDs and caches them for every object
+    this is called on.
     """
 
     _counter = 0
@@ -55,19 +49,20 @@ class IDGenerator:
 
 
 def generate_combinations(
-    generators_dict: Dict[str, Iterable[Any]],
-) -> Iterator[Dict[str, Any]]:
+    generators_dict: dict[str, Iterable[Any]],
+) -> Iterator[dict[str, Any]]:
     """
     Yield all combinations of generator values as keyword-argument dictionaries.
 
     :param generators_dict: A mapping of names to iterables of candidate values.
-    :return: An iterator of dictionaries, each mapping names to one combination of values.
+    :return: An iterator of dictionaries, each mapping names to one combination of
+        values.
     """
     for combination in itertools.product(*generators_dict.values()):
         yield dict(zip(generators_dict.keys(), combination))
 
 
-def make_list(value: Any) -> List:
+def make_list(value: Any) -> list:
     """
     Make a list from a value.
 
@@ -82,7 +77,8 @@ def is_iterable(obj: Any) -> bool:
     Check if an object is iterable.
 
     :param obj: The object to check.
-    :return: ``True`` if the object is a non-string, non-type iterable, ``False`` otherwise.
+    :return:``True`` if the object is a non-string, non-type iterable, ``False``
+        otherwise.
     """
     return callable(getattr(obj, "__iter__", None)) and not isinstance(
         obj, (str, type, bytes, bytearray)
@@ -99,7 +95,7 @@ def make_tuple(value: Any) -> Any:
     return tuple(value) if is_iterable(value) else (value,)
 
 
-def make_set(value: Any) -> Set:
+def make_set(value: Any) -> set:
     """
     Make a set from a value.
 
@@ -111,11 +107,12 @@ def make_set(value: Any) -> Set:
 
 def cartesian_product_while_passing_the_bindings_around(
     expressions: Iterable[SymbolicExpression],
-    sources: Optional[OperationResult],
+    sources: OperationResult | None,
 ) -> Iterator[OperationResult]:
     """
-    Evaluate the symbolic expressions by generating combinations of values from their evaluation generators while
-    passing the bindings from the previous evaluated generator to the next.
+    Evaluate the symbolic expressions by generating combinations of values from their
+    evaluation generators while passing the bindings from the previous evaluated
+    generator to the next.
 
     :param expressions: The symbolic expressions to evaluate.
     :param sources: The current OperationResult carrying bindings, or None.
@@ -124,16 +121,19 @@ def cartesian_product_while_passing_the_bindings_around(
 
     def _make_stage(
         inner_expression: SymbolicExpression,
-    ) -> Callable[[Optional[OperationResult]], Iterator[OperationResult]]:
+    ) -> Callable[[OperationResult | None], Iterator[OperationResult]]:
         """
-        Create a new evaluation stage for the given expression that combines the bindings from the previous stage
-        with the current evaluation result.
-        A stage is a function that takes a previous result and returns an iterator of results.
+        Create a new evaluation stage for the given expression that combines the
+        bindings from the previous stage with the current evaluation result.
+
+        A stage is a function that takes a previous result and returns an iterator of
+        results.
         """
 
-        def stage(prev: Optional[OperationResult]) -> Iterator[OperationResult]:
+        def stage(prev: OperationResult | None) -> Iterator[OperationResult]:
             """
-            Evaluate the inner expression and combine its bindings with the previous stage's bindings.
+            Evaluate the inner expression and combine its bindings with the previous
+            stage's bindings.
             """
             for result in inner_expression._evaluate_(prev):
                 if prev is not None:
@@ -153,29 +153,29 @@ T = TypeVar("T")
 
 
 def chain_stages(
-    stages: List[Callable[[Optional[OperationResult]], Iterator[OperationResult]]],
-    initial: Optional[OperationResult],
+    stages: list[Callable[[OperationResult | None], Iterator[OperationResult]]],
+    initial: OperationResult | None,
 ) -> Iterator[OperationResult]:
     """
     Chains a sequence of stages into a single pipeline.
 
-    This function takes a list of computational stages and an initial binding, passing the
-    result of each computation stage to the next one. It produces an iterator of bindings
-    by applying each stage in sequence to the current binding.
+    This function takes a list of computational stages and an initial binding, passing
+    the result of each computation stage to the next one. It produces an iterator of
+    bindings by applying each stage in sequence to the current binding.
 
-    :param stages: A list of stages where each stage is a callable that accepts
-        a Binding and produces an iterator of Bindings.
+    :param stages: A list of stages where each stage is a callable that accepts a
+        Binding and produces an iterator of Bindings.
     :param initial: The initial binding to start the computation with.
-
-    :return: An iterator over the bindings resulting from applying all
-        stages in sequence.
+    :return: An iterator over the bindings resulting from applying all stages in
+        sequence.
     """
 
     def evaluate_next_stage_or_yield(
-        stage_index: int, current_result: Optional[OperationResult]
+        stage_index: int, current_result: OperationResult | None
     ) -> Iterator[OperationResult]:
         """
-        Recursively evaluates the next stage or yields the current binding if all stages are done.
+        Recursively evaluates the next stage or yields the current binding if all stages
+        are done.
 
         :param stage_index: The index of the current stage.
         :param current_result: The current binding to be processed.
@@ -189,67 +189,16 @@ def chain_stages(
     yield from evaluate_next_stage_or_yield(0, initial)
 
 
-@lru_cache
-def get_function_argument_names(function: Callable) -> List[str]:
+def camel_case_to_words(name: str) -> str:
     """
-    :param function: A function to inspect
-    :return: The argument names of the function
+    Convert a CamelCase class name to space-separated lowercase words.
+
+    :param name: CamelCase identifier string.
+    :return: Space-separated lowercase words.
+
+    Examples::
+
+        camel_case_to_words("HasRole")     # → "has role"
+        camel_case_to_words("IsReachable") # → "is reachable"
     """
-    return list(inspect.signature(function).parameters.keys())
-
-
-def merge_args_and_kwargs(
-    function_or_class: Callable,
-    args: Tuple[Any, ...],
-    kwargs: Dict[str, Any],
-    ignore_first: bool = False,
-) -> Dict[str, Any]:
-    """
-    Merge the arguments and keyword-arguments of a function/class into a dict of keyword-arguments.
-    If a class is passed, the arguments are assumed to be the `__init__` arguments.
-
-    :param function_or_class: The function/class to get the argument names from
-    :param args: The arguments passed to the function
-    :param kwargs: The keyword arguments passed to the function
-    :param ignore_first: Whether to ignore the first argument or not.
-    Use this when `function_or_class` contains something like `self`
-    :return: The dict of assigned keyword-arguments.
-    """
-    starting_index = 1 if ignore_first else 0
-    function_or_class = (
-        function_or_class.__init__
-        if inspect.isclass(function_or_class)
-        else function_or_class
-    )
-    all_kwargs = {
-        name: arg
-        for name, arg in zip(
-            get_function_argument_names(function_or_class)[starting_index:],
-            args,
-        )
-    }
-    all_kwargs.update(kwargs)
-    return all_kwargs
-
-
-def convert_args_and_kwargs_into_hashable_key(
-    dictionary: Dict[str, Any],
-) -> Tuple[Any, ...]:
-    """
-    Generates a hashable key from the dictionary. The key is a tuple of sorted (key, value) pairs.
-    If a value is a dictionary or a set, it is converted to a frozenset of its items.
-    If a value is a list, it is converted to a tuple.
-
-    :param dictionary: The keyword arguments to generate the key from.
-    :return: The generated key as a tuple.
-    """
-    key = []
-    for k, v in dictionary.items():
-        if isinstance(v, dict):
-            v = frozenset(v.items())
-        elif isinstance(v, set):
-            v = frozenset(v)
-        elif isinstance(v, list):
-            v = tuple(v)
-        key.append((k, v))
-    return tuple(sorted(key))
+    return re.sub(r"([A-Z])", r" \1", name).strip().lower()

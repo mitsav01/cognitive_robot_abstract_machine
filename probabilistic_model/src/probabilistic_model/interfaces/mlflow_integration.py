@@ -3,7 +3,6 @@ from mlflow.models.signature import ModelSignature
 from mlflow.types import ColSpec, DataType, Schema
 from krrood.adapters.json_serializer import SubclassJSONSerializer, from_json
 from random_events.variable import Continuous, Symbolic, Integer
-from typing_extensions import Optional
 import json
 
 from probabilistic_model.probabilistic_model import ProbabilisticModel
@@ -13,13 +12,13 @@ class ProbabilisticModelWrapper(mlflow.pyfunc.PythonModel):
     """
     Wrapper for a probabilistic model to be used with MLflow.
 
-    The wrapper requires the artifact "model_path" to contain a path to a file that can be parsed using
-    the SubclassJSONSerializer.
+    The wrapper requires the artifact "model_path" to contain a path to a file that can
+    be parsed using the SubclassJSONSerializer.
     """
 
-    model: Optional[ProbabilisticModel] = None
+    model: ProbabilisticModel | None = None
 
-    def __init__(self, model: Optional[ProbabilisticModel] = None):
+    def __init__(self, model: ProbabilisticModel | None = None):
         self.model = model
         super().__init__()
 
@@ -35,6 +34,7 @@ class ProbabilisticModelWrapper(mlflow.pyfunc.PythonModel):
 def infer_signature(model: ProbabilisticModel) -> ModelSignature:
     """
     Infer the signature of a probabilistic model.
+
     :param model: The model to infer the signature from.
     :return: The inferred signature.
     """

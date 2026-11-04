@@ -4,11 +4,20 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "random_events"
-dynamic=["version", "dependencies"]
+dynamic = ["version"]
+dependencies = [
+    "numpy",
+    "plotly",
+    "typing_extensions",
+    "sortedcontainers",
+    "pybind11",
+    "setuptools-scm",
+    "krrood>=26.10.0",
+]
 description = "Random random events for probabilistic reasoning"
 readme = "README.md"
-requires-python = ">=3.8"
-license = {text = "MIT License"}
+requires-python = ">=3.12"
+license = {text = "LGPL-3.0-only"}
 authors = [
     {name = "Tom Schierenbeck", email = "tom_sch@uni-bremen.de"}
 ]
@@ -21,13 +30,13 @@ keywords = [
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
 
 [project.urls]
 "Source" = "https://github.com/cram2/cognitive_robot_abstract_machine"
 "Bug Tracker" = "https://github.com/cram2/cognitive_robot_abstract_machine/issues"
+"Changelog" = "https://github.com/cram2/cognitive_robot_abstract_machine/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -37,5 +46,20 @@ include = ["random_events*"]
 include-dirs = ["src/random_events_lib/random_events_lib/include"]
 
 [tool.setuptools.dynamic]
-version = {attr = "random_events.__version__"}
-dependencies = {file = "requirements.txt"}
+version = {attr = "random_events._version.__version__"}
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "jupyter",
+    "pillow",
+    "polytope",
+    "ortools",
+    "scipy",
+    "cvxopt",
+]
+
+[dependency-groups]
+workspace = [
+    "krrood",
+]

@@ -1,5 +1,4 @@
 import numpy as np
-from typing_extensions import Tuple, Union, List
 
 from semantic_digital_twin.datastructures.types import AnyMatrix4x4, NpMatrix4x4
 
@@ -26,7 +25,7 @@ def quaternion_conjugate(quaternion: np.ndarray) -> np.ndarray:
 
 
 def quaternion_from_axis_angle(
-    axis: Union[List[float], Tuple[float, float, float], np.ndarray], angle: float
+    axis: list[float] | tuple[float, float, float] | np.ndarray, angle: float
 ) -> np.ndarray:
     half_angle = angle / 2
     return np.array(
@@ -43,7 +42,7 @@ def quaternion_from_axis_angle(
 _EPS = np.finfo(float).eps * 4.0
 
 
-def rpy_from_matrix(rotation_matrix: NpMatrix4x4) -> Tuple[float, float, float]:
+def rpy_from_matrix(rotation_matrix: NpMatrix4x4) -> tuple[float, float, float]:
     """
     :param rotation_matrix: 4x4 Matrix
     :type rotation_matrix: Matrix
@@ -71,13 +70,14 @@ def rpy_from_matrix(rotation_matrix: NpMatrix4x4) -> Tuple[float, float, float]:
 
 def rpy_from_quaternion(
     qx: float, qy: float, qz: float, qw: float
-) -> Tuple[float, float, float]:
+) -> tuple[float, float, float]:
     return rpy_from_matrix(rotation_matrix_from_quaternion(qx, qy, qz, qw))
 
 
 def rotation_matrix_from_rpy(roll: float, pitch: float, yaw: float) -> NpMatrix4x4:
     """
     Conversion of roll, pitch, yaw to 4x4 rotation matrix according to:
+
     https://github.com/orocos/orocos_kinematics_dynamics/blob/master/orocos_kdl/src/frames.cpp#L167
     :return: 4x4 Matrix
     """
@@ -132,7 +132,7 @@ def rotation_matrix_from_quaternion(
 
 
 def rotation_matrix_from_axis_angle(
-    axis: Union[List[float], Tuple[float, float, float], np.ndarray], angle: float
+    axis: list[float] | tuple[float, float, float] | np.ndarray, angle: float
 ) -> NpMatrix4x4:
     return rotation_matrix_from_quaternion(*quaternion_from_axis_angle(axis, angle))
 
@@ -171,7 +171,7 @@ def quaternion_from_rotation_matrix(matrix: AnyMatrix4x4) -> np.ndarray:
 
 def axis_angle_from_quaternion(
     x: float, y: float, z: float, w: float
-) -> Tuple[np.ndarray, float]:
+) -> tuple[np.ndarray, float]:
     l = np.linalg.norm(np.array([x, y, z, w]))
     x, y, z, w = x / l, y / l, z / l, w / l
     w2 = np.sqrt(1 - w**2)
@@ -190,23 +190,26 @@ def axis_angle_from_quaternion(
     return np.array([x, y, z]), angle
 
 
-def axis_angle_from_rotation_matrix(m: NpMatrix4x4) -> Tuple[np.ndarray, float]:
+def axis_angle_from_rotation_matrix(m: NpMatrix4x4) -> tuple[np.ndarray, float]:
     return axis_angle_from_quaternion(*quaternion_from_rotation_matrix(m))
 
 
 def shortest_angular_distance(from_angle, to_angle):
-    """Given 2 angles, this returns the shortest angular
-    difference.  The inputs and ouputs are of course radians.
+    """
+    Given 2 angles, this returns the shortest angular difference.
 
-    The result would always be -pi <= result <= pi. Adding the result
-    to "from" will always get you an equivelent angle to "to".
+    The inputs and ouputs are of course radians.
+
+    The result would always be -pi <= result <= pi. Adding the result to "from" will
+    always get you an equivelent angle to "to".
     """
     return normalize_angle(to_angle - from_angle)
 
 
 def normalize_angle(angle):
-    """Normalizes the angle to be -pi to +pi
-    It takes and returns radians."""
+    """
+    Normalizes the angle to be -pi to +pi It takes and returns radians.
+    """
     a = normalize_angle_positive(angle)
     if a > np.pi:
         a -= 2.0 * np.pi
@@ -214,18 +217,17 @@ def normalize_angle(angle):
 
 
 def normalize_angle_positive(angle):
-    """Normalizes the angle to be 0 to 2*pi
-    It takes and returns radians."""
+    """
+    Normalizes the angle to be 0 to 2*pi It takes and returns radians.
+    """
     return angle % (2.0 * np.pi)
 
 
 def quaternion_slerp(q1, q2, t):
     """
-    spherical linear interpolation that takes into account that q == -q
-    :param q1: 4x1 Matrix
-    :param q2: 4x1 Matrix
-    :param t: float, 0-1
-    :return: 4x1 Matrix; Return spherical linear interpolation between two quaternions.
+    Spherical linear interpolation that takes into account that q == -q :param q1: 4x1
+    Matrix :param q2: 4x1 Matrix :param t: float, 0-1 :return: 4x1 Matrix; Return
+    spherical linear interpolation between two quaternions.
     """
     cos_half_theta = q1.dot(q2)
 

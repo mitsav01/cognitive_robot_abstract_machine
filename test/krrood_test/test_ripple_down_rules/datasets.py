@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 import os
 import pickle
+import tempfile
 from dataclasses import dataclass, field
 
+import pandas as pd
 import sqlalchemy
 from sqlalchemy import ForeignKey
 from sqlalchemy.orm import (
@@ -14,76 +17,115 @@ from sqlalchemy.orm import (
     MappedColumn,
 )
 from typing_extensions import Tuple, List, Set, Optional, Self, ClassVar
-from ucimlrepo import fetch_ucirepo
+from ucimlrepo import DatasetNotFoundError, fetch_ucirepo
 
 from krrood.ripple_down_rules.datastructures.case import (
     Case,
     create_cases_from_dataframe,
 )
 from krrood.ripple_down_rules.datastructures.enums import Category
-from krrood.ripple_down_rules.datastructures.tracked_object import TrackedObjectMixin
 from krrood.ripple_down_rules.rdr_decorators import RDRDecorator
 
+logger = logging.getLogger(__name__)
 
-def load_cached_dataset(cache_file):
-    """Loads the dataset from cache if it exists."""
-    dataset = {}
+
+@dataclass
+class ZooDataset:
+    """
+    The feature, target, and id columns of the zoo dataset, as fetched from the UCI ML
+    repository or loaded from cache.
+    """
+
+    features: pd.DataFrame
+    """
+    The feature columns of the dataset.
+    """
+
+    targets: pd.DataFrame
+    """
+    The target column(s) of the dataset.
+    """
+
+    ids: pd.DataFrame
+    """
+    The identifier column(s) of the dataset.
+    """
+
+
+def load_cached_dataset(cache_file) -> ZooDataset | None:
+    """
+    Loads the dataset from cache if it exists.
+    """
     if ".pkl" not in cache_file:
         cache_file += ".pkl"
-    for key in ["features", "targets", "ids"]:
+    parts = {}
+    for key in ("features", "targets", "ids"):
         part_file = cache_file.replace(".pkl", f"_{key}.pkl")
         if not os.path.exists(part_file):
             return None
         with open(part_file, "rb") as f:
-            dataset[key] = pickle.load(f)
-    return dataset
+            parts[key] = pickle.load(f)
+    return ZooDataset(**parts)
 
 
-def save_dataset_to_cache(dataset, cache_file):
-    """Saves only essential parts of the dataset to cache."""
-    dataset_to_cache = {
-        "features": dataset.data.features,
-        "targets": dataset.data.targets,
-        "ids": dataset.data.ids,
-    }
+def save_dataset_to_cache(dataset: ZooDataset, cache_file: str) -> None:
+    """
+    Saves only essential parts of the dataset to cache.
 
-    for key, value in dataset_to_cache.items():
-        with open(cache_file.replace(".pkl", f"_{key}.pkl"), "wb") as f:
-            pickle.dump(dataset_to_cache[key], f)
-    print("Dataset cached successfully.")
+    Each part file appears only once it is completely written, so a concurrent
+    :func:`load_cached_dataset` never reads a partially written part.
+    """
+    for key, part in vars(dataset).items():
+        part_file = cache_file.replace(".pkl", f"_{key}.pkl")
+        with tempfile.NamedTemporaryFile(
+            dir=os.path.dirname(part_file), delete=False
+        ) as temporary_file:
+            pickle.dump(part, temporary_file)
+        os.replace(temporary_file.name, part_file)
+    logger.info("Dataset cached successfully.")
 
 
-def get_dataset(dataset_id, cache_file: Optional[str] = None):
-    """Fetches dataset from cache or downloads it if not available."""
+def get_dataset(dataset_id, cache_file: str | None = None) -> ZooDataset | None:
+    """
+    Fetches dataset from cache or downloads it if not available.
+
+    Returns ``None`` if the dataset cannot be downloaded because the UCI ML repository
+    server is unreachable or does not have the dataset available, instead of raising, so
+    callers can skip gracefully.
+    """
     if cache_file is not None:
         if not cache_file.endswith(".pkl"):
             cache_file += ".pkl"
     dataset = load_cached_dataset(cache_file) if cache_file else None
-    if dataset is None:
-        print("Downloading dataset...")
+    if dataset is not None:
+        return dataset
 
-        dataset = fetch_ucirepo(id=dataset_id)
+    logger.info("Downloading dataset...")
+    try:
+        fetched = fetch_ucirepo(id=dataset_id)
+    except (ConnectionError, DatasetNotFoundError) as error:
+        logger.error(f"Failed to fetch dataset ({error}).")
+        return None
 
-        # Check if dataset is valid before caching
-        if dataset is None or not hasattr(dataset, "data"):
-            print("Error: Failed to fetch dataset.")
-            return None
+    # Check if dataset is valid before caching
+    if fetched is None or not hasattr(fetched, "data"):
+        logger.error("Failed to fetch dataset.")
+        return None
 
-        if cache_file:
-            save_dataset_to_cache(dataset, cache_file)
-
-        dataset = {
-            "features": dataset.data.features,
-            "targets": dataset.data.targets,
-            "ids": dataset.data.ids,
-        }
+    dataset = ZooDataset(
+        features=fetched.data.features,
+        targets=fetched.data.targets,
+        ids=fetched.data.ids,
+    )
+    if cache_file:
+        save_dataset_to_cache(dataset, cache_file)
 
     return dataset
 
 
 def load_zoo_dataset(
-    cache_file: Optional[str] = None,
-) -> Tuple[List[Case], List[Species]]:
+    cache_file: str | None = None,
+) -> tuple[list[Case], list[Species]]:
     """
     Load the zoo dataset.
 
@@ -91,17 +133,19 @@ def load_zoo_dataset(
     :return: all cases and targets.
     """
     # fetch dataset
-    try:
-        zoo = get_dataset(111, cache_file)
-    except ConnectionError:
-        print("Error: Failed to fetch dataset. Please check your internet connection.")
+    zoo = get_dataset(111, cache_file)
+    if zoo is None:
+        logger.error(
+            "Failed to fetch dataset. Please check your internet connection or the "
+            "dataset server availability."
+        )
         return [], []
 
     # data (as pandas dataframes)
-    X = zoo["features"]
-    y = zoo["targets"]
+    X = zoo.features
+    y = zoo.targets
     # get ids as list of strings
-    ids = zoo["ids"].values.flatten()
+    ids = zoo.ids.values.flatten()
     all_cases = create_cases_from_dataframe(X, name="Animal")
 
     category_names = [
@@ -119,7 +163,7 @@ def load_zoo_dataset(
     return all_cases, targets
 
 
-def load_zoo_cases(cache_file: Optional[str] = None) -> List[Case]:
+def load_zoo_cases(cache_file: str | None = None) -> list[Case]:
     """
     Load the zoo dataset cases.
 
@@ -160,22 +204,26 @@ class PhysicalObject:
     """
     The name of the object.
     """
-    _contained_objects: List[PhysicalObject] = field(default_factory=list)
+
+    _contained_objects: list[PhysicalObject] = field(default_factory=list)
     """
     The list of objects contained in this object.
     """
+
     _rdr_json_dir: ClassVar[str] = os.path.join(
         os.path.dirname(__file__), "test_results"
     )
     """
     The directory where the RDR serialized JSON files are stored.
     """
+
     _is_a_robot_rdr: ClassVar[RDRDecorator] = RDRDecorator(
         _rdr_json_dir, (bool,), True, package_name="test"
     )
     """
     The RDR decorator that is used to determine if the object is a robot or not.
     """
+
     _select_parts_rdr: ClassVar[RDRDecorator] = RDRDecorator(
         _rdr_json_dir, (Self,), False, package_name="test"
     )
@@ -184,11 +232,11 @@ class PhysicalObject:
     """
 
     @property
-    def contained_objects(self) -> List[PhysicalObject]:
+    def contained_objects(self) -> list[PhysicalObject]:
         return self._contained_objects
 
     @contained_objects.setter
-    def contained_objects(self, value: List[PhysicalObject]):
+    def contained_objects(self, value: list[PhysicalObject]):
         self._contained_objects = value
 
     @_is_a_robot_rdr.decorator
@@ -197,8 +245,8 @@ class PhysicalObject:
 
     @_select_parts_rdr.decorator
     def select_objects_that_are_parts_of_robot(
-        self, objects: List[PhysicalObject], robot: Robot
-    ) -> List[PhysicalObject]:
+        self, objects: list[PhysicalObject], robot: Robot
+    ) -> list[PhysicalObject]:
         pass
 
     def __str__(self):
@@ -222,7 +270,7 @@ class Part(PhysicalObject): ...
 
 @dataclass(eq=False)
 class Robot(PhysicalObject):
-    parts: List[Part] = field(default_factory=list)
+    parts: list[Part] = field(default_factory=list)
 
 
 class Base(sqlalchemy.orm.DeclarativeBase):
@@ -269,12 +317,12 @@ class MappedAnimal(MappedAsDataclass, Base):
     catsize: Mapped[bool]
     species: Mapped[Species] = mapped_column(nullable=True)
 
-    habitats: Mapped[Set[HabitatTable]] = relationship(default_factory=set)
+    habitats: Mapped[set[HabitatTable]] = relationship(default_factory=set)
 
 
 @dataclass(unsafe_hash=True)
-class WorldEntity(TrackedObjectMixin):
-    world: Optional[World] = field(default=None, kw_only=True, repr=False, hash=False)
+class WorldEntity:
+    world: World | None = field(default=None, kw_only=True, repr=False, hash=False)
 
 
 @dataclass(unsafe_hash=True)
@@ -307,9 +355,9 @@ class PrismaticConnection(Connection): ...
 @dataclass
 class World:
     id: int = 0
-    bodies: List[Body] = field(default_factory=list)
-    connections: List[Connection] = field(default_factory=list)
-    views: List[View] = field(default_factory=list, repr=False)
+    bodies: list[Body] = field(default_factory=list)
+    connections: list[Connection] = field(default_factory=list)
+    views: list[View] = field(default_factory=list, repr=False)
 
     def __hash__(self):
         return hash(self.id)
@@ -328,7 +376,7 @@ class View(WorldEntity): ...
 class Drawer(View):
     handle: Handle
     container: Container
-    correct: Optional[bool] = None
+    correct: bool | None = None
 
     def __hash__(self):
         return hash((self.__class__.__name__, self.handle, self.container))
@@ -346,7 +394,7 @@ class Drawer(View):
 @dataclass
 class Cabinet(View):
     container: Container
-    drawers: List[Drawer] = field(default_factory=list)
+    drawers: list[Drawer] = field(default_factory=list)
 
     def __hash__(self):
         return hash((self.__class__.__name__, self.container))

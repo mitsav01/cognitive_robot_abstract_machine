@@ -1,20 +1,19 @@
 """
 Query builders for the Entity Query Language.
 
-This module defines builder classes that collect metadata and produce symbolic expressions for filtering,
- grouping, ordering, and quantifying query results.
+This module defines builder classes that collect metadata and produce symbolic
+expressions for filtering,  grouping, ordering, and quantifying query results.
 """
 
 from __future__ import annotations
 
-import itertools
 import uuid
-from abc import ABC, abstractmethod
+from abc import ABC
 from dataclasses import dataclass, field
-from functools import cached_property, lru_cache
+from functools import cached_property
 
 from ordered_set import OrderedSet
-from typing_extensions import Tuple, List, Type, Optional, Callable, TYPE_CHECKING
+from typing_extensions import Callable, TYPE_CHECKING
 
 from krrood.entity_query_language.core.base_expressions import (
     SymbolicExpression,
@@ -39,7 +38,6 @@ from krrood.entity_query_language.query.quantifiers import (
 from krrood.entity_query_language.query.operations import (
     Where,
     Having,
-    OrderedBy,
     GroupedBy,
 )
 from krrood.entity_query_language.operators.aggregators import Aggregator, CountAll
@@ -47,7 +45,8 @@ from krrood.entity_query_language.core.variable import (
     Literal,
 )
 from krrood.entity_query_language.core.mapped_variable import MappedVariable
-from krrood.utils import memoize
+from krrood.patterns.caching import memoize
+import builtins
 
 if TYPE_CHECKING:
     from krrood.entity_query_language.factories import ConditionType
@@ -57,15 +56,16 @@ if TYPE_CHECKING:
 @dataclass
 class ExpressionBuilder(ABC):
     """
-    Base class for builder classes of symbolic expressions. This class collects meta-data about expressions to finally
-    build the expression.
+    Base class for builder classes of symbolic expressions.
+
+    This class collects meta-data about expressions to finally build the expression.
     """
 
     query: Query
     """
     The query that the expression is being built for.
     """
-    _built_expression: Optional[SymbolicExpression] = field(init=False, default=None)
+    _built_expression: SymbolicExpression | None = field(init=False, default=None)
     """
     The expression that is built from the metadata.
     """
@@ -95,7 +95,7 @@ class FilterBuilder(ExpressionBuilder, ABC):
     Metadata for Filter subclasses.
     """
 
-    conditions: Tuple[ConditionType, ...]
+    conditions: tuple[ConditionType, ...]
     """
     The conditions that must be satisfied.
     """
@@ -122,7 +122,7 @@ class FilterBuilder(ExpressionBuilder, ABC):
     @cached_property
     def aggregators_and_non_aggregators_in_conditions(
         self,
-    ) -> Tuple[Tuple[Aggregator, ...], Tuple[Selectable, ...]]:
+    ) -> tuple[tuple[Aggregator, ...], tuple[Selectable, ...]]:
         """
         :return: A tuple containing the aggregators and non-aggregators in the conditions.
         """
@@ -137,11 +137,11 @@ class FilterBuilder(ExpressionBuilder, ABC):
                 # No need to traverse inside aggregators
                 return
             elif isinstance(expr, Selectable) and not isinstance(
-                expr, (Literal, ResultQuantifier, Query)
+                expr, (Literal, Query)
             ):
                 non_aggregators.append(expr)
 
-            if isinstance(expr, (Literal, ResultQuantifier, Query)):
+            if isinstance(expr, (Literal, Query)):
                 # Subqueries are a boundary, we don't need to traverse inside them.
                 return
 
@@ -171,7 +171,8 @@ class WhereBuilder(FilterBuilder):
         """
         Assert that the where conditions are correct.
 
-        :raises AggregatorInWhereConditionsError: If the where conditions contain any aggregators.
+        :raises AggregatorInWhereConditionsError: If the where conditions contain any
+            aggregators.
         """
         super().assert_correct_conditions()
         aggregators, non_aggregators = (
@@ -192,8 +193,8 @@ class HavingBuilder(FilterBuilder):
 
     grouped_by: GroupedBy = field(kw_only=True, default=None)
     """
-    The GroupedBy expression associated with the having Filter, as the having conditions are applied on
-     the aggregations of grouped results.
+    The GroupedBy expression associated with the having Filter, as the having conditions
+    are applied on the aggregations of grouped results.
     """
 
     def build(self) -> Having:
@@ -216,7 +217,7 @@ class GroupedByBuilder(ExpressionBuilder):
     Metadata for the GroupedBy operation.
     """
 
-    variables_to_group_by: Tuple[Selectable, ...] = ()
+    variables_to_group_by: tuple[Selectable, ...] = ()
     """
     The variables to group the results by their values.
     """
@@ -281,7 +282,7 @@ class GroupedByBuilder(ExpressionBuilder):
             return False
 
     @cached_property
-    def ids_of_aggregated_variables(self) -> Tuple[uuid.UUID, ...]:
+    def ids_of_aggregated_variables(self) -> tuple[uuid.UUID, ...]:
         """
         :return: A tuple of ids of aggregated variables.
         """
@@ -292,7 +293,7 @@ class GroupedByBuilder(ExpressionBuilder):
         )
 
     @cached_property
-    def ids_of_variables_to_group_by(self) -> Tuple[uuid.UUID, ...]:
+    def ids_of_variables_to_group_by(self) -> tuple[uuid.UUID, ...]:
         """
         :return: A tuple of the binding IDs of the variables to group by.
         """
@@ -301,7 +302,7 @@ class GroupedByBuilder(ExpressionBuilder):
     @cached_property
     def aggregators_and_non_aggregators(
         self,
-    ) -> Tuple[List[Aggregator], List[Selectable]]:
+    ) -> tuple[list[Aggregator], list[Selectable]]:
         """
         :return: A tuple of lists of aggregator and non-aggregator variables used in the query.
         """
@@ -345,7 +346,7 @@ class GroupedByBuilder(ExpressionBuilder):
     @cached_property
     def aggregators_and_non_aggregators_in_ordered_by(
         self,
-    ) -> Tuple[List[Aggregator], List[Selectable]]:
+    ) -> tuple[list[Aggregator], list[Selectable]]:
         if not self.query._ordered_by_builder_:
             return [], []
 
@@ -359,7 +360,7 @@ class GroupedByBuilder(ExpressionBuilder):
         return [], [variable]
 
     @cached_property
-    def aggregators_in_selected_variables(self) -> Tuple[Aggregator, ...]:
+    def aggregators_in_selected_variables(self) -> tuple[Aggregator, ...]:
         """
         :return: A tuple of aggregators in the selected variables of the query.
         """
@@ -373,53 +374,39 @@ class GroupedByBuilder(ExpressionBuilder):
 @dataclass(eq=False)
 class QuantifierBuilder(ExpressionBuilder):
     """
-    Builds a result quantifier (An/The) of the specified type with the given child and quantification constraint.
+    Holds the result-quantifier specification (kind ``An``/``The`` and an optional constraint) that
+    the query's quantification pipeline stage enforces.
     """
 
-    type: Type[ResultQuantifier] = An
+    type: builtins.type[ResultQuantifier] = An
     """
-    The type of the quantifier to be built.
-    """
-    quantification_constraint: Optional[ResultQuantificationConstraint] = None
-    """
-    The quantification constraint that must be satisfied by the result quantifier if present.
-    """
-    child: Optional[Selectable] = None
-    """
-    The child expression of the quantifier.
+    The kind of quantifier requested.
     """
 
-    def build(self) -> ResultQuantifier:
-        """
-        Builds a result quantifier of the specified type with the given child and quantification constraint.
-        """
-        if self.type is An:
-            return self.type(
-                self.child,
-                _quantification_constraint_=self.quantification_constraint,
-            )
-        else:
-            return self.type(self.child)
+    quantification_constraint: ResultQuantificationConstraint | None = None
+    """
+    The quantification constraint that must be satisfied, if any.
+    """
 
 
 @dataclass(eq=False)
 class OrderedByBuilder(ExpressionBuilder):
+    """
+    Holds the ordering specification (variable, direction, key) that the query's ordering pipeline
+    stage applies.
+    """
+
     variable: Selectable
     """
     The variable to order by.
     """
+
     descending: bool = False
     """
     Whether to order the results in descending order.
     """
-    key: Optional[Callable] = None
+
+    key: Callable | None = None
     """
     A function to extract the key from the variable value.
     """
-    data_source: Optional[SymbolicExpression] = None
-    """
-    The data source that generates the results to be ordered.
-    """
-
-    def build(self) -> OrderedBy:
-        return OrderedBy(self.data_source, self.variable, self.descending, self.key)

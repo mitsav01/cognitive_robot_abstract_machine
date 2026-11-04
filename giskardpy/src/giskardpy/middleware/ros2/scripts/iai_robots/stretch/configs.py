@@ -1,46 +1,42 @@
 from dataclasses import dataclass, field
 
-from dataclasses import dataclass, field
 
 from giskardpy.middleware.ros2.robot_interface_config import (
-    StandAloneRobotInterfaceConfig,
-    RobotInterfaceConfig,
+    ClosedLoopRobotInterfaceConfig,
 )
-from giskardpy.model.world_config import (
-    WorldWithOmniDriveRobot,
-    WorldWithDiffDriveRobot,
-)
-from semantic_digital_twin.robots.robot_parts import AbstractRobot
-from semantic_digital_twin.robots.stretch import Stretch
+from giskardpy.model.world_config import WorldWithMobileRobot
+from semantic_digital_twin.robots.stretch import Stretch, StretchJoint
 from semantic_digital_twin.world_description.connections import (
     Connection6DoF,
     DifferentialDrive,
 )
 
 
-class StretchStandaloneInterface(StandAloneRobotInterfaceConfig):
+@dataclass
+class StretchVelocityInterface(ClosedLoopRobotInterfaceConfig):
+    """
+    Commands the arm, head and drive of Stretch through their velocity controllers.
+    """
 
-    def __init__(self, drive_joint_name: str = "brumbrum"):
-        super().__init__(
-            [
-                drive_joint_name,
-                "joint_gripper_finger_left",
-                "joint_gripper_finger_right",
-                "joint_right_wheel",
-                "joint_left_wheel",
-                "joint_lift",
-                "joint_arm_l3",
-                "joint_arm_l2",
-                "joint_arm_l1",
-                "joint_arm_l0",
-                "joint_wrist_yaw",
-                "joint_head_pan",
-                "joint_head_tilt",
-            ]
-        )
+    @staticmethod
+    def velocity_controlled_joint_names() -> list[StretchJoint]:
+        """
+        The joints driven by the velocity group controller.
 
-
-class StretchVelocityInterface(RobotInterfaceConfig):
+        Their order matches the controller's command layout, so it is significant.
+        """
+        return [
+            StretchJoint.ARM_L0,  # 0
+            StretchJoint.LIFT,  # 1
+            StretchJoint.WRIST_YAW,  # 2
+            StretchJoint.WRIST_PITCH,  # 3
+            StretchJoint.WRIST_ROLL,  # 4
+            StretchJoint.HEAD_PAN,  # 5
+            StretchJoint.HEAD_TILT,  # 6
+            StretchJoint.GRIPPER_LEFT_FINGER,  # 7
+            StretchJoint.RIGHT_WHEEL,  # 8
+            StretchJoint.LEFT_WHEEL,  # 9
+        ]
 
     def setup(self):
         self.sync_6dof_joint_with_tf_frame(
@@ -49,43 +45,46 @@ class StretchVelocityInterface(RobotInterfaceConfig):
             tf_child_frame="odom",
         )
 
+        self.sync_robot_parts()
+
         diff_drive = self.world.get_connections_by_type(DifferentialDrive)[0]
-        self.sync_odometry_topic(
-            "/odom",
-            diff_drive,
+        self.add_drive_velocity_command_topic(
+            command_topic="/stretch/cmd_vel", drive=diff_drive
         )
 
-        self.add_base_cmd_velocity(cmd_vel_topic="/stretch/cmd_vel", joint=diff_drive)
-
-        self.sync_joint_state_topic("/joint_states")
-        joints = [
-            "joint_arm_l0",
-            "joint_lift",
-            "joint_wrist_yaw",
-            "joint_wrist_pitch",
-            "joint_wrist_roll",
-            "joint_head_pan",
-            "joint_head_pan",
-            "joint_gripper_finger_left",
-            "joint_right_wheel",
-            "joint_left_wheel",
-        ]
-        self.add_joint_velocity_group_controller(
-            cmd_topic="/joint_velocity_cmd", connections=joints
+        self.add_joint_group_velocity_command_topic(
+            command_topic="/joint_velocity_cmd",
+            connections=self.velocity_controlled_joint_names(),
+            minimum_valid_velocity=0.03,
+            minimum_velocity_overrides={
+                StretchJoint.LIFT: 0.0,
+                StretchJoint.ARM_L0: 0.0,
+                StretchJoint.GRIPPER_LEFT_FINGER: 0.0,
+            },
         )
 
 
 @dataclass
-class WorldWithStretchConfig(WorldWithOmniDriveRobot):
-    urdf_view: AbstractRobot = field(kw_only=True, default=Stretch, init=False)
+class WorldWithStretchConfig(WorldWithMobileRobot):
+    """
+    A world containing only Stretch, modelled with an omnidirectional base.
+    """
 
-    def setup_collision_config(self):
-        pass
+    robot_class: type[Stretch] = field(kw_only=True, default=Stretch, init=False)
+    """
+    The robot class that is applied to the parsed description.
+    """
 
 
 @dataclass
-class WorldWithStretchConfigDiffDrive(WorldWithDiffDriveRobot):
-    urdf_view: AbstractRobot = field(kw_only=True, default=Stretch, init=False)
+class WorldWithStretchConfigDiffDrive(WorldWithStretchConfig):
+    """
+    A world containing only Stretch, which drives on a differential base.
+    """
 
-    def setup_collision_config(self):
-        pass
+    drive_class: type[DifferentialDrive] = field(
+        kw_only=True, default=DifferentialDrive, init=False
+    )
+    """
+    The kind of connection between the odometry body and the robot.
+    """

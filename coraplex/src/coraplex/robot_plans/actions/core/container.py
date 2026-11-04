@@ -1,181 +1,177 @@
 from __future__ import annotations
 
-from copy import deepcopy
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-import numpy as np
-from typing_extensions import Any, Dict
 
-from krrood.entity_query_language.core.base_expressions import SymbolicExpression
-from krrood.entity_query_language.factories import and_, ConditionType
-from coraplex.config.action_conf import ActionConfig
-from coraplex.datastructures.dataclasses import Context
-from coraplex.datastructures.enums import (
-    Arms,
-    ApproachDirection,
-    VerticalAlignment,
+from krrood.entity_query_language.factories import (
+    a,
+    flat_variable,
+    variable,
 )
-from coraplex.datastructures.grasp import GraspDescription
-from coraplex.locations.pose_validator import IsReachableBy
-from coraplex.plans.factories import sequential
-from coraplex.querying.predicates import GripperIsFree
-from coraplex.robot_plans.actions.base import ActionDescription
-from coraplex.robot_plans.actions.core.pick_up import GraspingAction
-from coraplex.robot_plans.motions.container import OpeningMotion, ClosingMotion
-from coraplex.robot_plans.motions.gripper import MoveGripperMotion
-from coraplex.view_manager import ViewManager
+from krrood.entity_query_language.query.match import Match
+from coraplex.querying.grasp_closeness import GraspsByCloseness
+from coraplex.robot_plans.actions.base import SequentialAction
+from cramph.node import StatechartNode
+from coraplex.robot_plans.actions.core.pick_up import GraspingAction, HasGraspChoice
+from coraplex.robot_plans.mixins import (
+    HasApproachesGraspPoses,
+    MovesToolCenterPoint,
+    OperatesGripper,
+)
+from giskardpy.motion_statechart.graph_node import MotionStatechartNode
+from giskardpy.motion_statechart.goals.grasped_mechanism import (
+    ArticulateGraspedMechanism,
+)
+from semantic_digital_twin.collision_checking.collision_matrix import CollisionRule
+from semantic_digital_twin.collision_checking.collision_rules import (
+    AllowCollisionForEndEffector,
+)
 from semantic_digital_twin.datastructures.definitions import GripperState
-from semantic_digital_twin.reasoning.robot_predicates import is_body_in_gripper
-from semantic_digital_twin.robots.robot_part_mixins import HasMobileBase
-from semantic_digital_twin.robots.robot_parts import AbstractRobot
+from semantic_digital_twin.robots.robot_parts import Arm, EndEffector
+from semantic_digital_twin.semantic_annotations.semantic_annotations import (
+    Handle,
+)
+from krrood_spatial_math.spatial_types import Pose
 from semantic_digital_twin.world_description.connections import ActiveConnection1DOF
-from semantic_digital_twin.world_description.world_entity import Body
+
+# %% taking a container by its handle
 
 
-@dataclass
-class OpenAction(ActionDescription):
+@dataclass(eq=False, repr=False, kw_only=True)
+class MovesContainerByItsHandle(
+    MovesToolCenterPoint, OperatesGripper, SequentialAction, HasGraspChoice, ABC
+):
     """
-    Opens a container like object
-    """
-
-    object_designator: Body
-    """
-    Object designator_description describing the object that should be opened
-    """
-    arm: Arms
-    """
-    Arm that should be used for opening the container
-    """
-    grasping_prepose_distance: float = ActionConfig.grasping_prepose_distance
-    """
-    The distance in meters the gripper should be at in the x-axis away from the handle.
+    An action that takes hold of a container's handle by :attr:`grasp`, moves the
+    container with it, lets go and clears the handle.
     """
 
-    def execute(self) -> None:
-        arm = ViewManager.get_arm_view(self.arm, self.robot)
-        end_effector = arm.end_effector
+    approach_clearance: float = HasApproachesGraspPoses.approach_clearance
+    """
+    The gap in meters between the handle and the gripper before it closes on it.
+    """
 
-        grasp_description = GraspDescription(
-            ApproachDirection.FRONT,
-            VerticalAlignment.NoAlignment,
-            end_effector,
-        )
+    release_clearance: float = 0.05
+    """
+    How far in meters the gripper backs off once it has let go, past where it leaves the
+    bounding box of the body :attr:`mechanism` moves.
+    """
 
-        self.add_subplan(
-            sequential(
-                [
-                    GraspingAction(self.object_designator, self.arm, grasp_description),
-                    OpeningMotion(self.object_designator, self.arm),
-                    MoveGripperMotion(
-                        GripperState.OPEN, self.arm, allow_gripper_collision=True
-                    ),
-                ]
-            )
-        ).perform()
-
-    @staticmethod
-    def pre_condition(
-        variables, context: Context, kwargs: Dict[str, Any]
-    ) -> ConditionType:
+    @classmethod
+    def from_handle(cls, handle: Handle, arm: Arm) -> Match:
         """
-        The gripper with which to open the container has to be free and the handle has to be reachable.
+        :param handle: The handle of the container.
+        :param arm: The arm that takes hold of the handle.
+        :return: This action on `handle`, with the grasp left open among the grasps
+            the handle offers, the closest to where the robot stands when it is grounded
+            first.
         """
-        test_world = deepcopy(context.world)
-        test_robot: AbstractRobot = test_world.get_semantic_annotation_by_id(
-            context.robot.id
+        # A variable, so the grasps are ranked when the action is grounded, from where
+        # the robot stands then.
+        where_the_robot_stands = variable(
+            Pose, domain=[Pose(reference_frame=arm._robot.root)]
         )
-        end_effector = ViewManager.get_end_effector_view(variables["arm"], test_robot)
-
-        return and_(
-            GripperIsFree(end_effector),
-            IsReachableBy(
-                world=test_world,
-                robot=test_world.get_semantic_annotations_by_type(type(context.robot))[
-                    0
-                ],
-                pose=kwargs["object_designator"].global_pose,
-                tip_link=end_effector.tool_frame,
-                grasp_description=GraspDescription(
-                    ApproachDirection.FRONT,
-                    VerticalAlignment.NoAlignment,
-                    next(end_effector.evaluate()),
-                ),
+        return a(cls)(
+            grasp=flat_variable(
+                GraspsByCloseness(handle, where_the_robot_stands, number_of_grasps=None)
             ),
+            arm=arm,
         )
 
-    @staticmethod
-    def post_condition(
-        variables, context: Context, kwargs: Dict[str, Any]
-    ) -> SymbolicExpression | bool:
+    @abstractmethod
+    def _create_mechanism_goal(self) -> MotionStatechartNode:
         """
-        The handle has to be in the gripper of the robot and the container has to be open.
+        :return: A new goal moving the container while its handle is held.
         """
-        end_effector = ViewManager.get_end_effector_view(kwargs["arm"], context.robot)
-        parent_connection = kwargs[
-            "object_designator"
-        ].get_first_parent_connection_of_type(ActiveConnection1DOF)
-        return (
-            is_body_in_gripper(kwargs["object_designator"], end_effector) > 0.9
-            or np.allclose(
-                kwargs["object_designator"].global_pose.to_position(),
-                ViewManager.get_end_effector_view(
-                    kwargs["arm"], context.robot
-                ).tool_frame.global_pose.to_position(),
-                atol=3e-2,
+
+    @property
+    def mechanism(self) -> ActiveConnection1DOF:
+        """
+        The connection the container moves along while its handle is held.
+        """
+        return self.grasp.graspable.root.get_first_parent_connection_of_type(
+            ActiveConnection1DOF
+        )
+
+    def back_off_pose(self, grasp_pose: Pose, end_effector: EndEffector) -> Pose:
+        """
+        The tool frame goal that clears the released handle and the container, back
+        along the way the gripper came in, so an open gripper still straddling the
+        handle is drawn off it rather than across it.
+
+        :param grasp_pose: The grasp frame the handle was held by.
+        :param end_effector: The end effector that held it.
+        :return: The pose the tool frame backs off to, in `grasp_pose`'s frame.
+        """
+        distance = (
+            HasApproachesGraspPoses.distance_to_boundary(
+                self.mechanism.child, grasp_pose
             )
-        ) and bool(parent_connection.position > 0.3)
+            + self.release_clearance
+        )
+        return HasApproachesGraspPoses.pre_grasp_pose(
+            grasp_pose, end_effector, distance
+        )
+
+    def create_temporary_collision_rules(self) -> list[CollisionRule]:
+        """
+        :return: An allowance for the gripper on the handle to touch its surroundings,
+            from taking hold of the handle until it has backed off it.
+        """
+        return [AllowCollisionForEndEffector(end_effector=self.arm.end_effector)]
+
+    def create_steps(self) -> list[StatechartNode]:
+        end_effector = self.arm.end_effector
+        return [
+            GraspingAction(
+                grasp=self.grasp,
+                arm=self.arm,
+                approach_clearance=self.approach_clearance,
+            ),
+            self._create_mechanism_goal(),
+            self.gripper_goal_type.moving_gripper_to(
+                end_effector.default_configuration(GripperState.OPEN)
+            ),
+            self.tool_center_point_goal(
+                self.back_off_pose(self.grasp.grasp_pose, end_effector),
+                self.arm,
+            ),
+        ]
 
 
-@dataclass
-class CloseAction(ActionDescription):
+# %% opening and closing
+
+
+@dataclass(eq=False, repr=False, kw_only=True)
+class OpenAction(MovesContainerByItsHandle):
+    """
+    Opens a container like object, driving its mechanism to its upper limit.
+    """
+
+    def _create_mechanism_goal(self) -> MotionStatechartNode:
+        return ArticulateGraspedMechanism(
+            tip_link=self.arm.end_effector.tool_frame,
+            environment_link=self.grasp.graspable.root,
+            goal_joint_state=self.mechanism.dof.limits.upper.position,
+        )
+
+
+@dataclass(eq=False, repr=False, kw_only=True)
+class CloseAction(MovesContainerByItsHandle):
     """
     Closes a container like object.
     """
 
-    object_designator: Body
+    closed_joint_position: float = 0.01
     """
-    Object designator_description describing the object that should be closed
-    """
-    arm: Arms
-    """
-    Arm that should be used for closing
-    """
-    grasping_prepose_distance: float = ActionConfig.grasping_prepose_distance
-    """
-    The distance in meters between the gripper and the handle before approaching to grasp.
+    The joint position, in meters or radians, the container's mechanism is driven to, or
+    its lower limit if that lies above.
     """
 
-    def execute(self) -> None:
-        arm = ViewManager.get_arm_view(self.arm, self.robot)
-        end_effector = arm.end_effector
-
-        grasp_description = GraspDescription(
-            ApproachDirection.FRONT,
-            VerticalAlignment.NoAlignment,
-            end_effector,
+    def _create_mechanism_goal(self) -> MotionStatechartNode:
+        return ArticulateGraspedMechanism(
+            tip_link=self.arm.end_effector.tool_frame,
+            environment_link=self.grasp.graspable.root,
+            goal_joint_state=self.closed_joint_position,
         )
-
-        self.add_subplan(
-            sequential(
-                [
-                    GraspingAction(self.object_designator, self.arm, grasp_description),
-                    ClosingMotion(self.object_designator, self.arm),
-                    MoveGripperMotion(
-                        GripperState.OPEN, self.arm, allow_gripper_collision=True
-                    ),
-                ]
-            )
-        ).perform()
-
-    @staticmethod
-    def post_condition(
-        variables, context: Context, kwargs: Dict[str, Any]
-    ) -> SymbolicExpression | bool:
-        """
-        The container has to be closed
-        """
-        close_connection = kwargs[
-            "object_designator"
-        ].get_first_parent_connection_of_type(ActiveConnection1DOF)
-
-        return bool(close_connection.position < 0.1)

@@ -19,11 +19,18 @@ The module is used for:
 """
 
 from __future__ import annotations
-from typing_extensions import Optional, TYPE_CHECKING, Any
+
+# %% Imports
+import time
+
+from typing_extensions import TYPE_CHECKING, Any
 
 from robokudo.io.camera_interface import CameraInterface
 from robokudo.cas import CASViews
 from robokudo.annotator_parameters import AnnotatorPredefinedParameters
+from robokudo.exceptions import CameraDataMissing, InvalidCameraObservation
+from semantic_digital_twin.datastructures.camera_model import CameraModality
+from robokudo.io.camera_model_adapters import RosCameraModelAdapter
 
 import cv2
 
@@ -40,6 +47,7 @@ TYPE_IMAGE: int = 2
 class OpenCVCameraWithoutDepthInterface(CameraInterface):
     """
     An openCV camera without depth information.
+
     An OpenCV-based interface for RGB-only cameras and video sources.
 
     This class handles various types of RGB input sources through OpenCV:
@@ -55,10 +63,11 @@ class OpenCVCameraWithoutDepthInterface(CameraInterface):
     """
 
     def __init__(self, camera_config: Any) -> None:
-        """Initialize the OpenCV camera interface.
+        """
+        Initialize the OpenCV camera interface.
 
-        Opens the video capture device and configures stream parameters based
-        on the input type (camera/video/image).
+        Opens the video capture device and configures stream parameters based on the
+        input type (camera/video/image).
 
         :raises IOError: If video stream/file cannot be opened
         """
@@ -70,14 +79,16 @@ class OpenCVCameraWithoutDepthInterface(CameraInterface):
         self.video_capture: cv2.VideoCapture = cv2.VideoCapture(
             device, camera_config.api_preference
         )
-        """OpenCV video capture object"""
-
+        """
+        OpenCV video capture object.
+        """
         if self.video_capture is None or not self.video_capture.isOpened():
             raise IOError("Could not open video stream/file:<{}>.".format(device))
 
         self.device_driver_flag: int = camera_config.device_driver_flag
-        """OpenCV-specific driver flags"""
-
+        """
+        OpenCV-specific driver flags.
+        """
         max_frames = self.video_capture.get(cv2.CAP_PROP_FRAME_COUNT)
 
         self.stream_type: int = (
@@ -85,23 +96,29 @@ class OpenCVCameraWithoutDepthInterface(CameraInterface):
             if max_frames >= 0.0
             else (TYPE_CAMERA if max_frames == -1.0 else TYPE_IMAGE)
         )
-        """Type of input (video/camera/image)"""
-
+        """
+        Type of input (video/camera/image)
+        """
         self._loop_counter: int = (
             self.stream_type != TYPE_CAMERA and camera_config.loop_mode
         )
-        """Number of remaining playback loops. Only works on video/image files."""
+        """
+        Number of remaining playback loops.
 
-        self._backup_color: Optional[npt.NDArray] = None
-        """Backup of image for single-image file mode"""
-
+        Only works on video/image files.
+        """
+        self._backup_color: npt.NDArray | None = None
+        """
+        Backup of image for single-image file mode.
+        """
         self.rk_logger.info("OpenCVCameraWithoutDepthInterface initialized")
 
     def has_new_data(self) -> bool:
-        """Check if new frame data is available.
+        """
+        Check if new frame data is available.
 
-        For video/camera streams, attempts to grab the next frame.
-        For single images, checks if backup image is available.
+        For video/camera streams, attempts to grab the next frame. For single images,
+        checks if backup image is available.
 
         :return: True if new data is available, False otherwise
         """
@@ -114,7 +131,8 @@ class OpenCVCameraWithoutDepthInterface(CameraInterface):
         return self._has_new_data
 
     def set_data(self, cas: CAS) -> None:
-        """Update the Common Analysis Structure with latest frame data.
+        """
+        Update the Common Analysis Structure with latest frame data.
 
         This method:
         * Retrieves the next frame from video/camera or backup
@@ -136,6 +154,7 @@ class OpenCVCameraWithoutDepthInterface(CameraInterface):
             # load last/only image
             color = self._backup_color
             retval = True
+        timestamp_nanoseconds = time.time_ns()
 
         self.rk_logger.debug(
             "loaded frame {} of {}".format(
@@ -181,17 +200,39 @@ class OpenCVCameraWithoutDepthInterface(CameraInterface):
 
         # update additional (fake) data
         depth = self.camera_config.depth
-        cam_info = self.camera_config.cam_info
-        cam_intrinsic = self.camera_config.cam_intrinsic
-        color2depth_ratio = self.camera_config.color2depth_ratio
-        viewpoint_cam_to_world = self.camera_config.viewpoint_cam_to_world
-
+        camera_info = self.camera_config.camera_info
+        color_to_depth_ratio = self.camera_config.color_to_depth_ratio
+        if camera_info is None:
+            raise CameraDataMissing(
+                data_name="Camera calibration",
+                context="OpenCV camera observation creation",
+            )
+        image_height, image_width = color.shape[:2]
+        if camera_info.width != image_width or camera_info.height != image_height:
+            raise InvalidCameraObservation(
+                reason=(
+                    f"the calibration resolution {camera_info.width}x"
+                    f"{camera_info.height} does not match the delivered image "
+                    f"{image_width}x{image_height}"
+                )
+            )
         if self.camera_config.update_global_with_depth_parameter:
             AnnotatorPredefinedParameters.global_with_depth = depth is not None
 
         cas.set(CASViews.COLOR_IMAGE, color)
         cas.set(CASViews.DEPTH_IMAGE, depth)
-        cas.set(CASViews.CAM_INFO, cam_info)
-        cas.set(CASViews.CAM_INTRINSIC, cam_intrinsic)
-        cas.set(CASViews.COLOR2DEPTH_RATIO, color2depth_ratio)
-        # cas.set(CASViews.VIEWPOINT_CAM_TO_WORLD, viewpoint_cam_to_world) # This shouldn't be set if it's not available
+        cas.set(CASViews.COLOR_TO_DEPTH_RATIO, color_to_depth_ratio)
+        camera_frame = camera_info.header.frame_id or self.camera_config.camera_frame
+        modalities = (
+            (CameraModality.COLOR, CameraModality.DEPTH)
+            if depth is not None
+            else (CameraModality.COLOR,)
+        )
+        self.store_camera_observation(
+            cas=cas,
+            camera_model=RosCameraModelAdapter.from_camera_info(camera_info),
+            camera_frame=camera_frame,
+            timestamp_nanoseconds=timestamp_nanoseconds,
+            modalities=modalities,
+            world_T_camera=None,
+        )

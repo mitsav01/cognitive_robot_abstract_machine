@@ -1,253 +1,622 @@
 from __future__ import annotations
 
 import math
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from time import sleep
-from typing import Tuple
+from datetime import timedelta
+from functools import cached_property
 
-from semantic_digital_twin.spatial_types.spatial_types import Pose
+import numpy as np
+from scipy.spatial.transform import Rotation
+
+from semantic_digital_twin.collision_checking.collision_matrix import CollisionRule
+from semantic_digital_twin.collision_checking.collision_rules import (
+    AllowCollisionForEndEffector,
+)
+from semantic_digital_twin.datastructures.alignment import AlignmentPair
+from semantic_digital_twin.robots.robot_part_mixins import HasMobileBase
+from semantic_digital_twin.robots.robot_parts import Arm
+from semantic_digital_twin.semantic_annotations.semantic_annotations import Tool
+from krrood_spatial_math.spatial_types import HomogeneousTransformationMatrix, Point3
+from krrood_spatial_math.spatial_types import Pose
 from semantic_digital_twin.world_description.world_entity import (
     Body,
-    SemanticAnnotation,
+    KinematicStructureEntity,
 )
-from typing_extensions import Union, Optional, Iterable
 
-from coraplex.robot_plans.motions.gripper import MoveToolCenterPointMotion
-from coraplex import utils
 from coraplex.datastructures.enums import (
-    Arms,
-    AxisIdentifier,
-    Grasp,
-    ApproachDirection,
-    VerticalAlignment,
+    CuttingTechnique,
+    MixingPattern,
+    PouringSide,
+    SlicingPriority,
+    ToolPathSegmentKind,
+    WipingTechnique,
 )
-from coraplex.robot_plans.actions.base import ActionDescription, DescriptionType
+from coraplex.exceptions import (
+    MissingWaypoints,
+    WipingTargetMissing,
+)
+from cramph.node import StatechartNode
+from coraplex.robot_plans.actions.base import (
+    Action,
+    ActionOfSteps,
+    ParallelAction,
+    SequentialAction,
+    TryAllAction,
+)
+from coraplex.robot_plans.mixins import MovesToolCenterPoint
+from cramph.composites import Parallel, PausedUntilTrue
+from giskardpy.motion_statechart.weights import DefaultWeights
+from giskardpy.motion_statechart.monitors.cartesian_monitors import PositionReached
+from giskardpy.motion_statechart.monitors.progress_monitors import Stalled
+from giskardpy.motion_statechart.tasks.align_planes import AlignPlanes
+from giskardpy.motion_statechart.tasks.cartesian_tasks import (
+    CartesianPositionTrajectory,
+)
+from coraplex.robot_plans.actions.composite.tool_paths import (
+    ToolPath,
+    ToolPathSegment,
+    build_container_path,
+    build_cutting_path,
+    build_surface_path,
+    planar_spiral_xy,
+    planar_sweep_x,
+)
 
 
-@dataclass
-class MixingAction(ActionDescription):
+@dataclass(kw_only=True, eq=False, repr=False)
+class FullBodyControlledAction(Action, ABC):
     """
-    Mixes contents of an object using a tool in a spiral motion.
-    """
-
-    object_: Body
-    """
-    The object to be mixed.
-    """
-    tool: SemanticAnnotation
-    """
-    The tool to be used for mixing.
-    """
-    arm: Arms
-    """
-    The arm to be used for the mixing action.
-    """
-    technique: Optional[str] = None
-    """
-    The technique to be used for mixing, e.g. 'Spiral Mixing'.
+    An action that controls the robot's full body, so the base can support the arm
+    motion.
     """
 
-    def execute(self) -> None:
-        lt = LocalTransformer()
-        obj = self.object_
-        pose = lt.transform_to_object_frame(obj.pose, obj)
-        height_offset = obj.size[2] + 0.05
-
-        for t in range(20):  # 2 * steps, with steps=10
-            p = pose.copy()
-            r, a, h = 0.0035 * t, math.radians(30) * t, 0.001 * t
-            p.pose.position.x += r * math.cos(a)
-            p.pose.position.y += r * math.sin(a)
-            p.pose.position.z += h
-
-            spiral = lt.transform_pose(p, "map")
-            spiral.pose.position.z += height_offset
-            World.current_world.add_vis_axis(spiral)
-            MoveToolCenterPointMotion(spiral, self.arm).perform()
-
-        World.current_world.remove_vis_axis()
+    @property
+    def controlled_root(self) -> KinematicStructureEntity:
+        """
+        :return: The world root for a robot with a mobile base, since driving the base
+            while manipulating moves the robot relative to the world; the robot's own
+            root otherwise.
+        """
+        if isinstance(self.robot, HasMobileBase):
+            return self.world.root
+        return self.robot.root
 
 
-@dataclass
-class PouringAction(ActionDescription):
+@dataclass(kw_only=True, eq=False, repr=False)
+class ToolMotionAction(
+    FullBodyControlledAction, MovesToolCenterPoint, ActionOfSteps, ABC
+):
     """
-    Performs a pouring action with a tool over an object, typically used for liquids.
-    """
-
-    object_: Body
-    """
-    The object over which the pouring action is performed.
-    """
-    tool: SemanticAnnotation
-    """
-    The tool used for pouring, e.g., a jug or a bottle.
-    """
-    arm: Arms
-    """
-    The arm to be used for the pouring action.
-    """
-    technique: Optional[str] = None
-    """
-    The technique to be used for pouring, e.g., 'Pouring'.
-    """
-    angle: Optional[float] = 90
-    """
-    The angle at which the tool is tilted during the pouring action, in degrees.
+    An action that moves a tool along a sampled tool path while keeping the tool aligned
+    with its target.
     """
 
-    def execute(self) -> None:
-        lt = LocalTransformer()
-        gripper_frame = World.robot.get_link_tf_frame("base_link")
-        grasp_rot = RobotDescription.current_robot_description.get_arm_chain(
-            self.arm
-        ).end_effector.get_grasp(
-            ApproachDirection.FRONT, VerticalAlignment.NoAlignment, False
+    arm: Arm
+    """
+    The arm holding the tool.
+    """
+
+    tool: Tool
+    """
+    The tool that performs the motion.
+    """
+
+    pointer_stride: int = 1
+    """
+    Keep every Nth sampled waypoint for execution.
+    """
+
+    maximum_skip_ahead: int = 2
+    """
+    How many waypoints ahead the tool may already be heading for, so a path is followed
+    as a continuous stroke rather than stopping at every point.
+    """
+
+    @abstractmethod
+    def _build_tool_path(self) -> ToolPath:
+        """
+        :return: The tool path of this action in its local frame.
+        """
+
+    @abstractmethod
+    def _path_frame(self) -> HomogeneousTransformationMatrix:
+        """
+        :return: The frame the tool path is expressed in.
+        """
+
+    @property
+    @abstractmethod
+    def _alignment_target(self) -> Body | Pose | None:
+        """
+        :return: The target the tool is aligned with during the motion.
+        """
+
+    @cached_property
+    def _waypoints(self) -> list[Point3]:
+        """
+        :return: The sampled waypoints of the tool path in the world frame.
+        """
+        _, points, _ = self._build_tool_path().sample(frame=self._path_frame())
+        stride = max(1, int(self.pointer_stride))
+        waypoints = [
+            Point3(x=point[0], y=point[1], z=point[2], reference_frame=self.world.root)
+            for point in points
+        ][::stride]
+        if not waypoints:
+            raise MissingWaypoints(self)
+        return waypoints
+
+    @property
+    def _alignment_pairs(self) -> list[AlignmentPair]:
+        """
+        :return: The normal pairs that keep the tool aligned with its target during
+            the motion, or an empty list if there is no alignment target.
+        """
+        target = self._alignment_target
+        if target is None:
+            return []
+        return self.tool.tool_alignment(target)
+
+    def create_temporary_collision_rules(self) -> list[CollisionRule]:
+        """
+        :return: An allowance for the manipulator holding the tool to touch what the
+            tool works on, for the whole stroke.
+        """
+        return [AllowCollisionForEndEffector(end_effector=self.arm.end_effector)]
+
+    def create_steps(self) -> list[StatechartNode]:
+        """
+        :return: The nodes moving the tool along the sampled waypoints while keeping it
+            aligned with its target, see :meth:`_tool_path_steps`.
+        """
+        return self._tool_path_steps()
+
+    def _tool_path_steps(self) -> list[StatechartNode]:
+        """
+        :return: The nodes following the sampled waypoints with the tool together,
+            holding every alignment the tool asks for while it moves, to be run side by
+            side.
+        """
+        root = self.controlled_root
+        tip = self.tool.get_tool_frame()
+        alignments = [
+            AlignPlanes(
+                tip_link=tip,
+                root_link=root,
+                tip_normal=pair.tip_normal,
+                goal_normal=pair.goal_normal,
+                weight=DefaultWeights.WEIGHT_BELOW_COLLISION_AVOIDANCE.value,
+            )
+            for pair in self._alignment_pairs
+        ]
+        trajectory = CartesianPositionTrajectory(
+            root_link=root,
+            tip_link=tip,
+            goal_points=self._waypoints,
+            maximum_skip_ahead=self.maximum_skip_ahead,
+            weight=float(DefaultWeights.WEIGHT_BELOW_COLLISION_AVOIDANCE),
+            threshold=self.position_threshold,
+        )
+        return [trajectory, *alignments]
+
+
+@dataclass(kw_only=True, eq=False, repr=False)
+class MixingAction(ToolMotionAction, ParallelAction):
+    """
+    Mix the contents of a container with a tool.
+    """
+
+    container: Body
+    """
+    The container (e.g., a bowl) whose contents are mixed.
+    """
+
+    mix_duration: float = 0.0
+    """
+    Total mixing time in seconds for a continuous stir loop.
+
+    If not positive, a short spiral pattern is used instead.
+    """
+
+    def _build_tool_path(self) -> ToolPath:
+        if self.mix_duration > 0.0:
+            return build_container_path(
+                self.container,
+                pattern=MixingPattern.STIR,
+                mix_duration=self.mix_duration,
+            )
+        return build_container_path(self.container, pattern=MixingPattern.SPIRAL)
+
+    def _path_frame(self) -> HomogeneousTransformationMatrix:
+        return self.container.global_pose.homogeneous_matrix
+
+    @property
+    def _alignment_target(self) -> Body | Pose | None:
+        return self.container
+
+
+@dataclass(kw_only=True, eq=False, repr=False)
+class CuttingAction(ToolMotionAction, ParallelAction):
+    """
+    Cut a food object with a tool.
+    """
+
+    object_to_cut: Body
+    """
+    The object to cut.
+    """
+
+    technique: CuttingTechnique = CuttingTechnique.SAW
+    """
+    The cutting technique to use.
+    """
+
+    slice_thickness: float | None = None
+    """
+    Target slice thickness in meters, controlling the spacing between cut anchors.
+
+    Derived from ``number_of_cuts_on_local_x_axis`` and the object size if None.
+    """
+
+    number_of_cuts_on_local_x_axis: int | None = None
+    """
+    Number of cut passes along the object's local X axis.
+
+    Derived from ``slice_thickness`` and the object size if None.
+    """
+
+    slicing_priority: SlicingPriority = SlicingPriority.THICKNESS
+    """
+    Parameter that is kept when ``slice_thickness`` and
+    ``number_of_cuts_on_local_x_axis`` do not both fit the object.
+    """
+
+    def _build_tool_path(self) -> ToolPath:
+        return build_cutting_path(
+            self.object_to_cut,
+            technique=self.technique,
+            slice_thickness=self.slice_thickness,
+            number_of_cuts_on_local_x_axis=self.number_of_cuts_on_local_x_axis,
+            slicing_priority=self.slicing_priority,
         )
 
-        pose = lt.transform_pose(self.object_.pose, gripper_frame)
-        pose.pose.position.x += 0.009
-        pose.pose.position.y -= 0.125
-        pose.pose.position.z += 0.17
+    def _path_frame(self) -> HomogeneousTransformationMatrix:
+        return self.object_to_cut.global_pose.homogeneous_matrix
 
-        pose = lt.transform_pose(lt.transform_pose(pose, "map"), gripper_frame)
-        pose.orientation = grasp_rot
-        pose = lt.transform_pose(pose, "map")
+    @property
+    def _alignment_target(self) -> Body | Pose | None:
+        return self.object_to_cut
 
-        World.current_world.add_vis_axis(pose)
-        MoveToolCenterPointMotion(
-            pose,
-            self.arm,
-            allow_gripper_collision=False,
-            movement_type=MovementType.CARTESIAN,
-        ).perform()
 
-        pour_pose = pose.copy()
-        pour_pose.rotate_by_quaternion(
-            utils.axis_angle_to_quaternion([1, 0, 0], -self.angle)
+@dataclass(kw_only=True, eq=False, repr=False)
+class WipingAction(ToolMotionAction, TryAllAction):
+    """
+    Wipe a surface or a patch around a target pose with a tool.
+    """
+
+    surface: Body | None = None
+    """
+    The surface body to wipe.
+
+    If None, ``target_pose`` is used instead.
+    """
+
+    target_pose: Pose | None = None
+    """
+    Center pose of the wiping patch.
+
+    Only used if ``surface`` is None.
+    """
+
+    technique: WipingTechnique = WipingTechnique.WIPE
+    """
+    The wiping technique to use.
+    """
+
+    length: float = 0.20
+    """
+    Sweep length in meters for the spreading motion.
+    """
+
+    cycles: float = 1.0
+    """
+    Number of sweep cycles for the spreading motion.
+    """
+
+    final_waypoint_success_tolerance: float = 0.08
+    """
+    Accept a stalled motion as successful if the tool ended up within this distance in
+    meters of the final waypoint.
+    """
+
+    stall_timeout: timedelta = timedelta(seconds=2)
+    """
+    How long the tool may make no progress along its path before the wipe is checked for
+    having reached the final waypoint.
+
+    .. note:: Has to be shorter than the stall timeout of the executor, which otherwise
+        aborts the plan first.
+    """
+
+    def __post_init__(self):
+        """
+        :raises WipingTargetMissing: If neither a surface nor a target pose is given.
+        """
+        super().__post_init__()
+        if self.surface is None and self.target_pose is None:
+            raise WipingTargetMissing(self)
+
+    def _build_tool_path(self) -> ToolPath:
+        if self.surface is not None:
+            return build_surface_path(self.surface, technique=self.technique)
+        if self.technique is WipingTechnique.SPREAD:
+            return ToolPath(
+                [
+                    ToolPathSegment(
+                        kind=ToolPathSegmentKind.SWEEP,
+                        duration=2.0,
+                        local_curve=lambda tau: planar_sweep_x(
+                            tau,
+                            length=float(self.length),
+                            cycles=max(1.0, float(self.cycles)),
+                        ),
+                    )
+                ]
+            )
+        return ToolPath(
+            [
+                ToolPathSegment(
+                    kind=ToolPathSegmentKind.SPIRAL,
+                    duration=2.0,
+                    local_curve=lambda tau: planar_spiral_xy(
+                        tau, r0=0.00, r1=0.12, cycles=2.5
+                    ),
+                )
+            ]
         )
-        World.current_world.add_vis_axis(pour_pose)
 
-        MoveToolCenterPointMotion(
-            pour_pose,
-            self.arm,
-            allow_gripper_collision=False,
-            movement_type=MovementType.CARTESIAN,
-        ).perform()
-        sleep(3)
-        MoveToolCenterPointMotion(
-            pose,
-            self.arm,
-            allow_gripper_collision=False,
-            movement_type=MovementType.CARTESIAN,
-        ).perform()
+    def _path_frame(self) -> HomogeneousTransformationMatrix:
+        if self.surface is not None:
+            return self.surface.global_pose.homogeneous_matrix
+        if self.target_pose.reference_frame is None:
+            self.target_pose.reference_frame = self.world.root
+        return self.target_pose.homogeneous_matrix
 
-        World.current_world.remove_vis_axis()
+    @property
+    def _alignment_target(self) -> Body | Pose | None:
+        if self.surface is not None:
+            return self.surface
+        return self.target_pose
 
-
-@dataclass
-class CuttingAction(ActionDescription):
-    """
-    Performs a cutting action on an object using a specified tool.
-    """
-
-    object_: Body
-    """
-    The object to be cut.
-    """
-    tool: SemanticAnnotation
-    """
-    The tool used for cutting, e.g., a knife or a saw.
-    """
-    arm: Arms
-    """
-    The arm to be used for the cutting action.
-    """
-    technique: Optional[str] = None
-    """
-    The technique to be used for cutting, e.g., 'Slicing', 'Halving', etc.
-    """
-    slice_thickness: Optional[float] = 0.03
-    """
-    The thickness of each slice to be cut from the object, in meters.
-    """
-
-    def execute(self) -> None:
-        if self.technique is None:
-            self.technique = "Slicing"
-        lt = LocalTransformer()
-        obj = self.object_
-        tool = self.tool
-        pose = lt.transform_to_object_frame(obj.pose, obj)
-
-        height = obj.size[2]
-        length = max(obj.size[0], obj.size[1])
-        length_tool = max(tool.size[0], tool.size[1])
-
-        num_slices, start_offset = self.calculate_slices(length)
-        slice_coordinates = [
-            start_offset + i * self.slice_thickness for i in range(num_slices)
+    def create_steps(self) -> list[StatechartNode]:
+        """
+        :return: The goal moving the tool along the sampled waypoints, and as an
+            alternative to it, the tool having reached the final waypoint once that
+            motion stalled, since the last stretch of a wipe often stalls against the
+            surface.
+        """
+        tool_path = Parallel(nodes=self._tool_path_steps())
+        return [
+            tool_path,
+            PausedUntilTrue(
+                monitor=Stalled(monitored_node=tool_path, timeout=self.stall_timeout),
+                monitored_node=PositionReached(
+                    name=f"{self.name}/final waypoint reached",
+                    root_link=self.world.root,
+                    tip_link=self.tool.root,
+                    goal_point=self._waypoints[-1],
+                    threshold=self.final_waypoint_success_tolerance,
+                ),
+            ),
         ]
 
-        slice_poses = []
-        for x in slice_coordinates:
-            tmp_pose = pose.copy()
-            tmp_pose.pose.position.x = x
-            slice_poses.append(tmp_pose)
 
-        for slice_pose in slice_poses:
-            pose_a = obj.pose
-            pose_b = World.robot.pose
-            angle, angle_y = self.get_rotation_offset_from_axis_preference(
-                pose_a, pose_b
-            )
-            direction = 1 if angle_y >= 0 else -1
-            slice_pose.pose.position.y += direction * (length_tool / 2)
+@dataclass(kw_only=True, eq=False, repr=False)
+class PouringAction(FullBodyControlledAction, MovesToolCenterPoint, SequentialAction):
+    """
+    Pour from a held source container into a target container by tilting the source next
+    to the target's rim.
+    """
 
-            new_pose = self.perpendicular_pose(slice_pose=slice_pose, angle=angle)
-            final_pose = lt.transform_pose(new_pose, "map")
+    target_container: Body
+    """
+    The container that is poured into.
+    """
 
-            print(final_pose)
-            World.current_world.add_vis_axis(final_pose)
+    source_container: Tool
+    """
+    The held container that is poured from.
+    """
 
-            lift_pose = new_pose.copy()
-            lift_pose.pose.position.z += height
+    arm: Arm
+    """
+    The arm holding the source container.
+    """
 
-    def calculate_slices(self, obj_length):
-        if self.technique == "Halving":
-            return 1, 0
-        if self.technique in [
-            "Cutting Action",
-            "Sawing",
-            "Paring",
-            "Cutting",
-            "Carving",
-            "Slicing",
-        ]:
-            num_slices = int(obj_length // self.slice_thickness)
-            start_offset = (-obj_length / 2) + (self.slice_thickness / 2)
-            return num_slices, start_offset
-        return 0, 0
+    tilt_angle: float = 1.85
+    """
+    Tilt angle in radians applied to the source container while pouring.
+    """
 
-    @staticmethod
-    def perpendicular_pose(slice_pose, angle) -> Pose:
-        pose_rotated = slice_pose
-        rotation_quaternion = utils.axis_angle_to_quaternion([0, 0, 1], angle)
-        pose_rotated.rotate_by_quaternion(rotation_quaternion)
-        return pose_rotated
+    pour_side: PouringSide | None = None
+    """
+    Robot-relative side of the target container to pour from.
 
-    @staticmethod
-    def get_rotation_offset_from_axis_preference(
-        pose_a, pose_b: Pose
-    ) -> Tuple[int, float]:
+    Defaults to the side of the pouring arm, so one-arm robots can still use either
+    side's pouring geometry.
+    """
+
+    pour_side_offset: float = 0.0
+    """
+    Extra lateral offset in meters of the pour point from the target container's center.
+    """
+
+    pour_approach_offset: float = 0.0
+    """
+    Extra offset in meters away from the target container along the approach direction.
+    """
+
+    pour_height: float = 0.13
+    """
+    TCP height in meters above the target container for the pre-pour pose.
+    """
+
+    def _effective_pour_side(self) -> PouringSide:
         """
-        Compute a discrete rotation offset (-90 or 90 degrees) to align this pose's local axes with the direction
-        toward a target pose, based on which axis (X or Y) is more aligned.
-
-        :param pose_a: The source pose.
-        :param pose_b: The target pose to align with.
-        :return: Tuple of (rotation offset in degrees, signed angle difference in radians for Y axis).
+        :return: The requested pour side, or the side of the pouring arm if none was
+            requested.
         """
-        fx, ax = pose_a.is_facing_2d_axis(pose_b, axis=AxisIdentifier.X)
-        fy, ay = pose_a.is_facing_2d_axis(pose_b, axis=AxisIdentifier.Y)
+        if self.pour_side is not None:
+            return self.pour_side
+        if self.arm is self.robot.get_right_arm_if_specified():
+            return PouringSide.RIGHT
+        return PouringSide.LEFT
 
-        return (-90 if abs(ax) > abs(ay) else 90), ay
+    def _mouth_height_above_tool_frame(self) -> float:
+        """
+        :return: Height in meters of the source container's opening above the arm's
+            tool frame, measured along the tool frame's z axis.
+        """
+        tool_frame = self.arm.end_effector.tool_frame
+        tool_frame_T_source = self.world.compute_forward_kinematics_np(
+            tool_frame, self.source_container.root
+        )
+        bounding_box = (
+            self.source_container.root.visual.as_bounding_box_collection_in_frame(
+                self.source_container.root
+            ).bounding_box()
+        )
+        mouth_in_source = np.array(
+            [
+                0.5 * (bounding_box.min_x + bounding_box.max_x),
+                0.5 * (bounding_box.min_y + bounding_box.max_y),
+                bounding_box.max_z,
+                1.0,
+            ]
+        )
+        return float((tool_frame_T_source @ mouth_in_source)[2])
+
+    def _approach_direction(
+        self, target_pose: Pose, robot_pose: Pose
+    ) -> tuple[float, float]:
+        """
+        :return: The XY unit vector from the robot toward the target container,
+            snapped to the target's nearest local axis so the pour never aims at a
+            corner.
+        """
+        approach_x = float(target_pose.x) - float(robot_pose.x)
+        approach_y = float(target_pose.y) - float(robot_pose.y)
+        approach_norm = math.hypot(approach_x, approach_y)
+        if approach_norm < 1e-6:
+            approach_x, approach_y = 1.0, 0.0
+        else:
+            approach_x /= approach_norm
+            approach_y /= approach_norm
+
+        target_quaternion = [float(value) for value in target_pose.quaternion.to_np()]
+        target_rotation = Rotation.from_quat(target_quaternion)
+        target_x_axis = target_rotation.apply([1, 0, 0])
+        target_y_axis = target_rotation.apply([0, 1, 0])
+        approach_vector = np.array([approach_x, approach_y, 0.0])
+        candidates = [target_x_axis, -target_x_axis, target_y_axis, -target_y_axis]
+        alignments = [np.dot(approach_vector, candidate) for candidate in candidates]
+        best = candidates[int(np.argmax(alignments))]
+
+        snapped_norm = math.hypot(float(best[0]), float(best[1]))
+        if snapped_norm <= 1e-6:
+            return approach_x, approach_y
+        return float(best[0]) / snapped_norm, float(best[1]) / snapped_norm
+
+    def _pour_poses(self) -> tuple[Pose, Pose]:
+        """
+        :return: The pre-pour pose next to the target container's rim and the tilted
+            pouring pose.
+        """
+        pour_side = self._effective_pour_side()
+        target_pose = self.target_container.global_pose
+        robot_pose = self.robot.root.global_pose
+
+        approach_x, approach_y = self._approach_direction(target_pose, robot_pose)
+        robot_right_x = approach_y
+        robot_right_y = -approach_x
+        side_sign = 1.0 if pour_side == PouringSide.RIGHT else -1.0
+
+        side_offset = float(self.pour_side_offset) + math.sin(self.tilt_angle) * max(
+            self._mouth_height_above_tool_frame(), 0.0
+        )
+        approach_offset = float(self.pour_approach_offset)
+
+        pour_x = (
+            float(target_pose.x)
+            + side_sign * robot_right_x * side_offset
+            - approach_x * approach_offset
+        )
+        pour_y = (
+            float(target_pose.y)
+            + side_sign * robot_right_y * side_offset
+            - approach_y * approach_offset
+        )
+        pour_z = float(target_pose.z) + float(self.pour_height)
+
+        yaw_to_target = math.atan2(
+            float(target_pose.y) - pour_y, float(target_pose.x) - pour_x
+        )
+        base_rotation = Rotation.from_euler("z", yaw_to_target)
+        if pour_side == PouringSide.LEFT:
+            base_rotation = Rotation.from_euler("z", math.pi) * base_rotation
+
+        signed_tilt_angle = (
+            self.tilt_angle if pour_side == PouringSide.RIGHT else -self.tilt_angle
+        )
+        tilted_rotation = base_rotation * Rotation.from_euler("y", signed_tilt_angle)
+
+        pre_pour_pose = self._pose_from_rotation(pour_x, pour_y, pour_z, base_rotation)
+        pour_pose = self._pose_from_rotation(pour_x, pour_y, pour_z, tilted_rotation)
+        return pre_pour_pose, pour_pose
+
+    def _pose_from_rotation(
+        self, x: float, y: float, z: float, rotation: Rotation
+    ) -> Pose:
+        """
+        :param x: X position of the pose in the world frame.
+        :param y: Y position of the pose in the world frame.
+        :param z: Z position of the pose in the world frame.
+        :param rotation: Orientation of the pose.
+        :return: The pose in the world frame.
+        """
+        quat_x, quat_y, quat_z, quat_w = rotation.as_quat()
+        return Pose.from_xyz_quaternion(
+            pos_x=x,
+            pos_y=y,
+            pos_z=z,
+            quat_x=quat_x,
+            quat_y=quat_y,
+            quat_z=quat_z,
+            quat_w=quat_w,
+            reference_frame=self.world.root,
+        )
+
+    def create_temporary_collision_rules(self) -> list[CollisionRule]:
+        """
+        :return: An allowance for the manipulator holding the source container to touch
+            the rim it pours over.
+        """
+        return [AllowCollisionForEndEffector(end_effector=self.arm.end_effector)]
+
+    def create_steps(self) -> list[StatechartNode]:
+        """
+        :return: The goals moving the source container to the pre-pour pose and then
+            tilting it into the pouring pose.
+        """
+        pre_pour_pose, pour_pose = self._pour_poses()
+        return [
+            self.tool_center_point_goal(
+                pre_pour_pose,
+                self.arm,
+            ),
+            self.tool_center_point_goal(
+                pour_pose,
+                self.arm,
+            ),
+        ]

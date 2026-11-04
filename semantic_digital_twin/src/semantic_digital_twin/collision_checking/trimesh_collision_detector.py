@@ -3,7 +3,6 @@ from dataclasses import dataclass, field
 import fcl
 import numpy as np
 from trimesh.collision import CollisionManager, mesh_to_BVH
-from typing_extensions import Optional, Dict
 
 from semantic_digital_twin.collision_checking.collision_detector import (
     CollisionDetector,
@@ -20,27 +19,31 @@ class FCLCollisionDetector(CollisionDetector):
         default_factory=CollisionManager, init=False
     )
     """
-    The collision manager from trimesh to handle collision detection
+    The collision manager from trimesh to handle collision detection.
     """
-    _last_synced_state: Optional[int] = field(default=None, init=False)
+
+    _last_synced_state: int | None = field(default=None, init=False)
     """
-    Last synced state version of the world
+    Last synced state version of the world.
     """
-    _last_synced_model: Optional[int] = field(default=None, init=False)
+
+    _last_synced_model: int | None = field(default=None, init=False)
     """
-    Last synced model version of the world
+    Last synced model version of the world.
     """
-    _collision_objects: Dict[Body, fcl.CollisionObject] = field(
+
+    _collision_objects: dict[Body, fcl.CollisionObject] = field(
         default_factory=dict, init=False
     )
     """
-    The FCL collision objects for each body in the world
+    The FCL collision objects for each body in the world.
     """
+
     buffer: float = field(default=0.05, init=False)
 
     def sync_world_model(self) -> None:
         """
-        Synchronize the collision checker with the current world model
+        Synchronize the collision checker with the current world model.
         """
         if self._last_synced_model == self._world.get_world_model_manager().version:
             return
@@ -63,7 +66,7 @@ class FCLCollisionDetector(CollisionDetector):
 
     def sync_world_state(self) -> None:
         """
-        Synchronize the collision checker with the current world state
+        Synchronize the collision checker with the current world state.
         """
         if self._last_synced_state == self._world.state.version:
             return
@@ -79,11 +82,14 @@ class FCLCollisionDetector(CollisionDetector):
         self, collision_matrix: CollisionMatrix
     ) -> CollisionCheckingResult:
         """
-        Checks for collisions in the current world state. The collision manager from trimesh returns all collisions,
-        which are then filtered based on the provided collision matrix. If there are multiple contacts between two bodies,
-        only the first contact is returned.
+        Checks for collisions in the current world state.
 
-        :param collision_matrix: An optional set of CollisionCheck objects to filter the collisions. If None is provided, all collisions are checked.
+        The collision manager from trimesh returns all collisions, which are then
+        filtered based on the provided collision matrix. If there are multiple contacts
+        between two bodies, only the first contact is returned.
+
+        :param collision_matrix: An optional set of CollisionCheck objects to filter the
+            collisions. If None is provided, all collisions are checked.
         :return: A list of Collision objects representing the detected collisions.
         """
         result = []

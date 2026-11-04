@@ -1,80 +1,117 @@
 from __future__ import annotations
 
-import abc
-from abc import ABC
 from dataclasses import field
 
-import krrood.symbolic_math.symbolic_math as sm
-from giskardpy.motion_statechart.context import MotionStatechartContext
-from giskardpy.motion_statechart.data_types import ObservationStateValues
-from giskardpy.motion_statechart.graph_node import MotionStatechartNode, NodeArtifacts
+from krrood.ormatic.utils import classproperty
+from cramph.node import EndedByOwner
+from cramph.context import ContextExtension
+from giskardpy.motion_statechart.context import MotionControlContext
+from giskardpy.motion_statechart.exceptions import EmptyDegreesOfFreedomError
+from giskardpy.motion_statechart.graph_node import (
+    MotionStatechartNode,
+    velocity_convergence_expression,
+)
+from cramph.node import NodeArtifacts
 from giskardpy.utils.decorators import dataclass
+from krrood.symbolic_math.symbolic_math import FloatVariable
+from semantic_digital_twin.world_description.degree_of_freedom import DegreeOfFreedom
 
 
-@dataclass
-class ThreadedPayloadMonitor(MotionStatechartNode, ABC):
+@dataclass(repr=False, eq=False, kw_only=True)
+class LocalMinimumReached(EndedByOwner, MotionStatechartNode):
     """
-    A monitor which executes its __call__ function when start_condition becomes True.
-    Subclass this and implement __init__.py and __call__. The __call__ method should change self.state to True when
-    it's done.
-    Calls __call__ in a separate thread. Use for expensive operations
-    """
-
-    state: ObservationStateValues = field(
-        init=False, default=ObservationStateValues.UNKNOWN
-    )
-
-    @abc.abstractmethod
-    def __call__(self):
-        pass
-
-
-@dataclass
-class LocalMinimumReached(MotionStatechartNode):
-    """
-    Checks if the robot has reached a local minimum in the trajectory,
-    by checking if all velocities are below a degree of freedoms' max velocity *`joint_convergence_threshold`.
+    Checks if the robot has reached a local minimum in the trajectory, by checking if
+    all velocities are below a degree of freedoms' max velocity
+    *`joint_convergence_threshold`.
     """
 
     joint_convergence_threshold: float = 0.01
     """
-    if a degree of freedom velocity is below its maximum velocity * this value, it is considered as not moving. 
+    If a degree of freedom velocity is below its maximum velocity * this value, it is
+    considered as not moving.
     """
+
     minimum_threshold: float = 0.01
     """
-    Minimum value for degree of freedom velocity * joint_convergence_threshold. 
+    Minimum value for degree of freedom velocity * joint_convergence_threshold.
     """
+
     maximum_threshold: float = 0.06
     """
-    Maximum value for degree of freedom velocity * joint_convergence_threshold. 
+    Maximum value for degree of freedom velocity * joint_convergence_threshold.
     """
+
     windows_size: int = 1
     """
     Windows size for joint convergence check.
     """
 
-    def build(self, context: MotionStatechartContext) -> NodeArtifacts:
-        artifacts = NodeArtifacts()
+    degrees_of_freedom: list[DegreeOfFreedom] | None = None
+    """
+    Degrees of freedom to check for convergence.
 
-        ref = []
-        symbols = []
-        for dof in context.world.active_degrees_of_freedom:
-            velocity_limit = dof.limits.upper.velocity
-            velocity_limit *= self.joint_convergence_threshold
-            velocity_limit = min(
-                max(self.minimum_threshold, velocity_limit), self.maximum_threshold
+    Defaults to ``context.world.active_degrees_of_freedom`` (every active degree of
+    freedom) if left ``None``.
+    """
+
+    minimum_time: float = 1.0
+    """
+    Minimum elapsed control time (in seconds) before the observation can become true.
+    """
+
+    measure_from_own_start: bool = True
+    """
+    Whether ``minimum_time`` is measured from when this monitor itself started, instead
+    of from the start of the whole motion chart.
+
+    Set this when the monitor is wrapped around one specific, possibly late-starting
+    motion (e.g. via :class:`~cramph.composites.Parallel`)
+    -- otherwise ``minimum_time`` could already be satisfied by cycles the chart spent
+    on earlier, unrelated motions, before this one ever started.
+    """
+
+    _start_cycle_variable: FloatVariable | None = field(
+        init=False, default=None, repr=False
+    )
+    """
+    Control-cycle count at which this monitor actually started running, set in
+    ``on_start`` when :attr:`measure_from_own_start` is True.
+    """
+
+    @classproperty
+    def required_context_extensions(cls) -> tuple[type[ContextExtension], ...]:
+        return super().required_context_extensions + (MotionControlContext,)
+
+    def on_start(self) -> None:
+        if self.measure_from_own_start:
+            self.context.float_variable_data.set_value(
+                self._start_cycle_variable,
+                self.context.tick_variable.evaluate()[0],
             )
-            ref.append(velocity_limit)
-            symbols.append(dof.variables.velocity)
-        ref = sm.Vector(ref)
-        vel_symbols = sm.Vector(symbols)
 
-        dt = (
-            context.qp_controller_config.control_dt
-            or context.qp_controller_config.model_predictive_control_time_step
+    def set_up(self) -> None:
+        """
+        Register the variable holding the tick this monitor started on, if it measures
+        from its own start.
+        """
+        super().set_up()
+        if self.measure_from_own_start:
+            self._start_cycle_variable = FloatVariable(f"{self.name}_start_cycle")
+            self.context.float_variable_data.register_expression(
+                self._start_cycle_variable
+            )
+
+    def build_artifacts(self) -> NodeArtifacts:
+        if self.degrees_of_freedom is not None and not self.degrees_of_freedom:
+            raise EmptyDegreesOfFreedomError(node=self)
+        return NodeArtifacts(
+            observation=velocity_convergence_expression(
+                context=self.context,
+                joint_convergence_threshold=self.joint_convergence_threshold,
+                minimum_threshold=self.minimum_threshold,
+                maximum_threshold=self.maximum_threshold,
+                degrees_of_freedom=self.degrees_of_freedom,
+                minimum_time=self.minimum_time,
+                reference_cycle_variable=self._start_cycle_variable,
+            )
         )
-        traj_longer_than_1_sec = context.control_cycle_variable * dt > 1
-        artifacts.observation = sm.trinary_logic_and(
-            traj_longer_than_1_sec, sm.logic_all(sm.abs(vel_symbols) < ref)
-        )
-        return artifacts

@@ -8,11 +8,13 @@ import numpy as np
 import trimesh
 from fbxloader import Object3D, Mesh as FBXMesh, Scene
 
+from semantic_digital_twin.adapters.exceptions import (
+    UnexpectedArrayShape,
+    UnsupportedFBXAxis,
+)
 from semantic_digital_twin.adapters.mesh import MeshParser
 from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
-from semantic_digital_twin.spatial_types import (
-    HomogeneousTransformationMatrix,
-)
+from krrood_spatial_math.spatial_types import HomogeneousTransformationMatrix
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import FixedConnection
 from semantic_digital_twin.world_description.geometry import Mesh
@@ -24,8 +26,9 @@ from semantic_digital_twin.world_description.world_entity import Body
 class CoordinateAxis(Enum):
     """
     Enum for coordinate axes with direction.
-    The value is a tuple of (axis_index, sign), where axis_index is 0 for X, 1 for Y, and 2 for Z,
-    and sign is 1 for positive direction and -1 for negative direction.
+
+    The value is a tuple of (axis_index, sign), where axis_index is 0 for X, 1 for Y,
+    and 2 for Z, and sign is 1 for positive direction and -1 for negative direction.
     """
 
     POSITIVE_X = (0, 1)
@@ -37,15 +40,20 @@ class CoordinateAxis(Enum):
 
     @classmethod
     def from_fbx(cls, axis_value: int, sign: int) -> CoordinateAxis:
-        """Map FBX axis index + sign into a CoordinateAxis enum."""
-        assert axis_value in (0, 1, 2), "axis_value must be 0, 1, or 2"
-        assert sign in (1, -1), "sign must be 1 or -1"
+        """
+        Map FBX axis index + sign into a CoordinateAxis enum.
+
+        :raises UnsupportedFBXAxis: If the index and sign name no axis.
+        """
         for member in cls:
             if member.value[0] == axis_value and member.value[1] == sign:
                 return member
+        raise UnsupportedFBXAxis(axis_index=axis_value, sign=sign)
 
     def to_vector(self) -> np.ndarray:
-        """Convert the CoordinateAxis to a 3D unit vector."""
+        """
+        Convert the CoordinateAxis to a 3D unit vector.
+        """
         idx, sgn = self.value
         v = np.zeros(3)
         v[idx] = float(sgn)
@@ -56,8 +64,10 @@ class CoordinateAxis(Enum):
 class FBXGlobalSettings:
     """
     Class to handle FBX global settings, particularly the coordinate system.
-    This class extracts the up, front, and coordinate axes from the FBX file and provides
-    a method to get the transformation matrix from FBX to Semantic Digital Twin coordinate system.
+
+    This class extracts the up, front, and coordinate axes from the FBX file and
+    provides a method to get the transformation matrix from FBX to Semantic Digital Twin
+    coordinate system.
     """
 
     fbx_loader: fbxloader.FBXLoader
@@ -66,13 +76,19 @@ class FBXGlobalSettings:
     """
 
     up_axis: CoordinateAxis = field(init=False)
-    """The up axis of the FBX file."""
+    """
+    The up axis of the FBX file.
+    """
 
     front_axis: CoordinateAxis = field(init=False)
-    """The front axis of the FBX file."""
+    """
+    The front axis of the FBX file.
+    """
 
     coord_axis: CoordinateAxis = field(init=False)
-    """The final, third axis of the FBX file, called the coordinate axis."""
+    """
+    The final, third axis of the FBX file, called the coordinate axis.
+    """
 
     def __post_init__(self):
         fbx = self.fbx_loader
@@ -94,7 +110,8 @@ class FBXGlobalSettings:
 
     def get_semantic_digital_twin_T_fbx(self) -> np.ndarray:
         """
-        Get the transformation matrix from FBX to Semantic Digital Twin coordinate system.
+        Get the transformation matrix from FBX to Semantic Digital Twin coordinate
+        system.
         """
         sX = self.front_axis.to_vector()
         sY = self.coord_axis.to_vector()
@@ -119,15 +136,24 @@ class FBXParser(MeshParser):
         fbx_vertices: np.ndarray, semantic_digital_twin_T_fbx: np.ndarray
     ) -> np.ndarray:
         """
-        Transform vertices from FBX coordinate system to Semantic Digital Twin coordinate system.
+        Transform vertices from FBX coordinate system to Semantic Digital Twin
+        coordinate system.
+
+        :raises UnexpectedArrayShape: If the vertices are not an (N, 3) array or the
+            transformation is not a 4x4 matrix.
         """
-        assert (
-            fbx_vertices.ndim == 2 and fbx_vertices.shape[1] == 3
-        ), "vertices must be (N,3)"
-        assert semantic_digital_twin_T_fbx.shape == (
-            4,
-            4,
-        ), "semantic_digital_twin_T_fbx must be 4x4"
+        if fbx_vertices.ndim != 2 or fbx_vertices.shape[1] != 3:
+            raise UnexpectedArrayShape(
+                array_name="fbx_vertices",
+                expected_shape="(N, 3)",
+                actual_shape=list(fbx_vertices.shape),
+            )
+        if semantic_digital_twin_T_fbx.shape != (4, 4):
+            raise UnexpectedArrayShape(
+                array_name="semantic_digital_twin_T_fbx",
+                expected_shape="(4, 4)",
+                actual_shape=list(semantic_digital_twin_T_fbx.shape),
+            )
 
         fbx_vertices_h = np.hstack(
             [
@@ -141,12 +167,9 @@ class FBXParser(MeshParser):
         )
         return semantic_digital_twin_vertices[:, :3]
 
-    def parse(self) -> World:
+    def create_world(self) -> World:
         """
-        Parse the FBX file, each object in the FBX file is converted to a body in the world and the meshes are loaded
-        as Mesh objects.
-
-        :return: A World containing content of the FBX file.
+        :return: A world holding one body for every object in the FBX file.
         """
         fbx = fbxloader.FBXLoader(self.file_path)
 

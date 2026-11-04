@@ -1,9 +1,10 @@
-import copy
+# %% Imports
+
 import os
 import uuid
 from dataclasses import dataclass
 
-import open3d as o3d
+import open3d
 import pytest
 import pymongo
 import numpy as np
@@ -12,9 +13,18 @@ import robokudo.cas
 from robokudo import world as rk_world
 from robokudo.cas import CAS, CASViews
 from robokudo.io.storage import Storage
+from robokudo.io.sensor_world import RecordedCameraWorld
+from robokudo.types.camera import CameraObservation
 from robokudo.types.cv import ImageROI
 from robokudo.types.scene import ObjectHypothesis
-from semantic_digital_twin.spatial_types import HomogeneousTransformationMatrix
+from krrood_spatial_math.spatial_types import Point2
+from semantic_digital_twin.datastructures.camera_model import PinholeCameraModel
+from semantic_digital_twin.datastructures.camera_resolution import CameraResolution
+from semantic_digital_twin.datastructures.prefixed_name import PrefixedName
+from semantic_digital_twin.robots.robot_parts import Camera
+from krrood_spatial_math.spatial_types import HomogeneousTransformationMatrix
+
+# %% Camera behavior
 
 
 @dataclass
@@ -73,17 +83,22 @@ def create_point_cloud():
     )
 
     # Create the point cloud
-    point_cloud = o3d.geometry.PointCloud()
-    point_cloud.points = o3d.utility.Vector3dVector(points)
+    point_cloud = open3d.geometry.PointCloud()
+    point_cloud.points = open3d.utility.Vector3dVector(points)
 
     return point_cloud
 
 
-def create_camera_intrinsic():
+def create_camera_model() -> PinholeCameraModel:
     """
-    Create an Open3D pinhole camera intrinsic for testing.
+    Create a semantic pinhole camera model for testing.
     """
-    return o3d.camera.PinholeCameraIntrinsic(640, 480, 525.0, 526.0, 319.5, 239.5)
+    return PinholeCameraModel(
+        image_resolution=CameraResolution(width=640, height=480),
+        focal_length_x=525.0,
+        focal_length_y=526.0,
+        principal_point=Point2(x=319.5, y=239.5),
+    )
 
 
 class TestStorage:
@@ -217,7 +232,7 @@ class TestStorage:
         cas_data.set("custom_tuple", (1.2, 3.4))
         cas_data.set("custom_numpy", np.array([[1, 2], [3, 4]], dtype=np.int16))
         cas_data.set("custom_cloud", create_point_cloud())
-        cas_data.set("pc_cam_intrinsic", create_camera_intrinsic())
+        cas_data.pointcloud_camera_model = create_camera_model()
 
         result = store_cas_in_storage(storage_instance, cas_data)
         assert result.acknowledged
@@ -246,14 +261,8 @@ class TestStorage:
             np.asarray(retrieved_cas_record["views"]["custom_cloud"].points),
             np.asarray(create_point_cloud().points),
         )
-        restored_intrinsic = retrieved_cas_record["views"]["pc_cam_intrinsic"]
-        expected_intrinsic = create_camera_intrinsic()
-        assert restored_intrinsic.width == expected_intrinsic.width
-        assert restored_intrinsic.height == expected_intrinsic.height
-        np.testing.assert_allclose(
-            np.asarray(restored_intrinsic.intrinsic_matrix),
-            np.asarray(expected_intrinsic.intrinsic_matrix),
-        )
+        restored_model = retrieved_cas_record["views"][CASViews.POINTCLOUD_CAMERA_MODEL]
+        assert restored_model == create_camera_model()
 
     def test_extra_views_krrood_fallback_for_dataclass(
         self, storage_instance, cas_data
@@ -290,7 +299,7 @@ class TestStorage:
         with pytest.raises(TypeError):
             Storage.generate_dict_from_real_cas(cas)
 
-    def test_cam_to_world_transform_roundtrip_preserves_world_references(
+    def test_camera_observation_roundtrip_preserves_current_frame_state(
         self, storage_instance, cas_data
     ):
         world_frame = f"map_{uuid.uuid4().hex[:8]}"
@@ -303,6 +312,14 @@ class TestStorage:
         sem_world = rk_world.world_instance()
         camera_body = sem_world.get_body_by_name(camera_frame)
         world_body = sem_world.get_body_by_name(world_frame)
+        camera_model = create_camera_model()
+        camera = Camera(
+            name=PrefixedName(name=camera_frame),
+            root=camera_body,
+            camera_model=camera_model,
+        )
+        with sem_world.modify_world():
+            sem_world.add_semantic_annotation(camera)
 
         transform = HomogeneousTransformationMatrix.from_xyz_quaternion(
             pos_x=0.1,
@@ -315,7 +332,13 @@ class TestStorage:
             child_frame=camera_body,
             reference_frame=world_body,
         )
-        cas_data.set(CASViews.CAM_TO_WORLD_TRANSFORM, transform)
+        observation = CameraObservation(
+            camera=camera,
+            effective_camera_model=camera_model,
+            world_T_camera=transform,
+            timestamp_nanoseconds=123_456_789,
+        )
+        cas_data.camera_observation = observation
 
         result = store_cas_in_storage(storage_instance, cas_data)
         assert result.acknowledged
@@ -324,16 +347,28 @@ class TestStorage:
             {"_id": result.inserted_id}
         )
         assert retrieved_cas_record is not None
-
         retrieved_cas_record["views"] = {}
+        rk_world.init_world_with_entity_tracker()
+        RecordedCameraWorld(observation).install(rk_world.world_instance())
+        rk_world.init_world_entity_tracker_from_world(rk_world.world_instance())
         storage_instance.load_views_from_mongo_in_cas(retrieved_cas_record)
-        restored_transform = retrieved_cas_record["views"][
-            CASViews.CAM_TO_WORLD_TRANSFORM
+        restored_observation = retrieved_cas_record["views"][
+            CASViews.CAMERA_OBSERVATION
         ]
-
-        assert isinstance(restored_transform, HomogeneousTransformationMatrix)
-        np.testing.assert_allclose(restored_transform.to_np(), transform.to_np())
-        assert restored_transform.child_frame is not None
-        assert restored_transform.reference_frame is not None
-        assert str(restored_transform.child_frame.name) == str(camera_body.name)
-        assert str(restored_transform.reference_frame.name) == str(world_body.name)
+        assert restored_observation.camera is not camera
+        assert restored_observation.camera.id == camera.id
+        assert restored_observation.camera.name == camera.name
+        assert restored_observation.camera.camera_model == camera.camera_model
+        assert restored_observation.effective_camera_model == camera_model
+        assert (
+            restored_observation.timestamp_nanoseconds
+            == observation.timestamp_nanoseconds
+        )
+        restored_transform = restored_observation.world_T_camera_or_raise()
+        np.testing.assert_allclose(
+            restored_transform.to_np(), observation.world_T_camera_or_raise().to_np()
+        )
+        assert restored_transform.reference_frame is not world_body
+        assert restored_transform.reference_frame.id == world_body.id
+        assert restored_transform.reference_frame.name == world_body.name
+        assert restored_transform.child_frame is restored_observation.camera.root

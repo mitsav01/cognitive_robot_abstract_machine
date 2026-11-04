@@ -48,7 +48,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Iterator, List
+from typing_extensions import Callable, Iterator
 
 from line_profiler import LineProfiler
 
@@ -82,8 +82,8 @@ from experiments.experiment_definitions import (
     ExperimentsTable,
     MeanAndStandardDeviation,
     TypstRenderer,
+    Unit,
 )
-
 
 # %% Self-contained domain types
 
@@ -121,7 +121,7 @@ class Owner(Symbol):
 _CATEGORIES = ("tool", "toy", "device")
 
 
-def _build_gadgets(count: int) -> List[Gadget]:
+def _build_gadgets(count: int) -> list[Gadget]:
     """
     Construct a deterministic list of :class:`Gadget` instances.
 
@@ -134,7 +134,7 @@ def _build_gadgets(count: int) -> List[Gadget]:
     ]
 
 
-def _build_owners(count: int) -> List[Owner]:
+def _build_owners(count: int) -> list[Owner]:
     """
     Construct a deterministic list of :class:`Owner` instances.
 
@@ -200,7 +200,7 @@ def _workload_inference() -> int:
     return len(list(query.evaluate()))
 
 
-def build_workloads() -> List[Workload]:
+def build_workloads() -> list[Workload]:
     """
     :return: The standard set of workloads exercising filtering, multi-source joins,
         aggregation and generative inference.
@@ -261,7 +261,7 @@ class MonitoringLevelResult(ExperimentResult):
 
     level: str
     """The :class:`MonitoringLevel` value this row reports."""
-    milliseconds_per_iteration: MeanAndStandardDeviation
+    duration_per_iteration: MeanAndStandardDeviation
     """Mean +- standard deviation of the wall-clock time for one pass over all workloads."""
     overhead_vs_baseline_ms: float
     """Mean milliseconds added relative to the ``both_off`` baseline (0.0 for the baseline)."""
@@ -271,10 +271,10 @@ class MonitoringLevelResult(ExperimentResult):
 
 def measure_level(
     level: MonitoringLevel,
-    workloads: List[Workload],
+    workloads: list[Workload],
     iterations: int,
     warmups: int,
-) -> List[float]:
+) -> list[float]:
     """
     Time ``iterations`` passes over all *workloads* at the given monitoring *level*.
 
@@ -282,22 +282,22 @@ def measure_level(
     :param workloads: The workloads to run, in order, once per iteration.
     :param iterations: Number of measured iterations.
     :param warmups: Number of leading iterations to discard before measuring.
-    :return: Per-iteration durations in milliseconds (length ``iterations``).
+    :return: Per-iteration durations in seconds (length ``iterations``).
     """
-    durations_ms: List[float] = []
+    durations_seconds: list[float] = []
     with apply_monitoring_level(level):
         for index in range(iterations + warmups):
             start = time.perf_counter()
             for workload in workloads:
                 workload.run()
-            elapsed_ms = (time.perf_counter() - start) * 1000.0
+            elapsed_seconds = time.perf_counter() - start
             if index >= warmups:
-                durations_ms.append(elapsed_ms)
-    return durations_ms
+                durations_seconds.append(elapsed_seconds)
+    return durations_seconds
 
 
 def run_ab_comparison(
-    workloads: List[Workload],
+    workloads: list[Workload],
     iterations: int,
     warmups: int,
 ) -> ExperimentsTable:
@@ -317,13 +317,13 @@ def run_ab_comparison(
     ]
     stats = {
         level: MeanAndStandardDeviation.from_measurements(
-            measure_level(level, workloads, iterations, warmups)
-        )
+            measure_level(level, workloads, iterations, warmups), unit=Unit.SECONDS
+        ).to(Unit.MILLISECONDS)
         for level in ordered_levels
     }
     baseline_ms = stats[MonitoringLevel.BOTH_OFF].mean
 
-    rows: List[MonitoringLevelResult] = []
+    rows: list[MonitoringLevelResult] = []
     for level in ordered_levels:
         mean_ms = stats[level].mean
         overhead_ms = round(mean_ms - baseline_ms, 2)
@@ -333,7 +333,7 @@ def run_ab_comparison(
         rows.append(
             MonitoringLevelResult(
                 level=level.value,
-                milliseconds_per_iteration=stats[level],
+                duration_per_iteration=stats[level],
                 overhead_vs_baseline_ms=overhead_ms,
                 overhead_vs_baseline_percent=overhead_percent,
             )
@@ -344,7 +344,7 @@ def run_ab_comparison(
 # %% Per-line profiling
 
 
-def monitoring_target_functions() -> List[Callable]:
+def monitoring_target_functions() -> list[Callable]:
     """
     Collect every hot monitoring function to feed to :class:`line_profiler.LineProfiler`.
 
@@ -354,7 +354,7 @@ def monitoring_target_functions() -> List[Callable]:
 
     :return: The functions to profile line by line.
     """
-    targets: List[Callable] = [
+    targets: list[Callable] = [
         StackFrame.from_frame_info,
         StackFrame.from_raw_frame,
         StackFrame._from_frame,
@@ -380,7 +380,7 @@ def monitoring_target_functions() -> List[Callable]:
     return targets
 
 
-def profile_lines(workloads: List[Workload], repetitions: int) -> str:
+def profile_lines(workloads: list[Workload], repetitions: int) -> str:
     """
     Run a line-by-line profile of the monitoring functions under :attr:`MonitoringLevel.FULL`.
 

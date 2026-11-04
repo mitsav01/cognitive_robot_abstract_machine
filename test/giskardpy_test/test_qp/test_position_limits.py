@@ -1,15 +1,17 @@
 import numpy as np
 import pytest
 
-from giskardpy.executor import Executor
-from giskardpy.motion_statechart.context import MotionStatechartContext
 from giskardpy.motion_statechart.graph_node import EndMotion
-from giskardpy.motion_statechart.motion_statechart import MotionStatechart
+from cramph.statechart import Statechart
 from giskardpy.motion_statechart.tasks.joint_tasks import JointPositionList, JointState
-from giskardpy.qp.dof_limits import QuadraticProgramDegreeOfFreedomLimits
+from giskardpy.qp.dof_limits import DegreeOfFreedomDecisionVariables, DirectLimits
 from giskardpy.qp.qp_controller_config import QPControllerConfig
 from semantic_digital_twin.world import World
 from semantic_digital_twin.world_description.connections import ActiveConnection
+from semantic_digital_twin.robots.pr2 import PR2Joint
+from giskardpy.motion_control import MotionControl
+from cramph.context import StatechartContext
+from cramph.executor import StatechartExecutor
 
 TARGET_FREQUENCY = 20
 PREDICTION_HORIZON = 10
@@ -21,75 +23,84 @@ VELOCITY_LIMIT = 1.0
 
 
 def test_joint_goal_inside_limits_reached(pr2_world_state_reset):
-    connection = pr2_world_state_reset.get_connection_by_name("head_pan_joint")
+    connection = pr2_world_state_reset.get_connection_by_name(PR2Joint.HEAD_PAN)
     dof = connection.dof
     lower = dof.limits.lower.position
     upper = dof.limits.upper.position
     goal = 1.0
 
-    msc = MotionStatechart()
+    executor = StatechartExecutor(
+        context=StatechartContext(world=pr2_world_state_reset),
+        extensions=[MotionControl()],
+    )
+    statechart = Statechart(context=executor.context)
     joint_goal = JointPositionList(
         goal_state=JointState.from_mapping({connection: goal})
     )
-    msc.add_node(joint_goal)
+    statechart.add_node(joint_goal)
     end = EndMotion()
-    msc.add_node(end)
-    end.start_condition = joint_goal.observation_variable
+    statechart.add_node(end)
+    end.start_condition = joint_goal.observes_true
 
-    kin_sim = Executor(MotionStatechartContext(world=pr2_world_state_reset))
-    kin_sim.compile(motion_statechart=msc)
-    kin_sim.tick_until_end()
+    executor.compile(statechart=statechart)
+    executor.tick_until_end()
 
     assert np.isclose(connection.position, goal, atol=0.01)
     assert lower <= connection.position <= upper
 
 
 def test_joint_goal_clamped_to_upper_limit(pr2_world_state_reset):
-    connection = pr2_world_state_reset.get_connection_by_name("head_pan_joint")
+    connection = pr2_world_state_reset.get_connection_by_name(PR2Joint.HEAD_PAN)
     dof = connection.dof
     upper = dof.limits.upper.position
     goal_beyond_limit = upper + 2.0
 
-    msc = MotionStatechart()
+    executor = StatechartExecutor(
+        context=StatechartContext(world=pr2_world_state_reset),
+        extensions=[MotionControl()],
+    )
+    statechart = Statechart(context=executor.context)
     joint_goal = JointPositionList(
         goal_state=JointState.from_mapping({connection: goal_beyond_limit})
     )
-    msc.add_node(joint_goal)
+    statechart.add_node(joint_goal)
     end = EndMotion()
-    msc.add_node(end)
-    end.start_condition = joint_goal.observation_variable
+    statechart.add_node(end)
+    end.start_condition = joint_goal.observes_true
 
-    kin_sim = Executor(MotionStatechartContext(world=pr2_world_state_reset))
-    kin_sim.compile(motion_statechart=msc)
-    kin_sim.tick_until_end()
+    executor.compile(statechart=statechart)
+    executor.tick_until_end()
 
     assert np.isclose(connection.position, upper, atol=0.01)
 
 
 def test_joint_goal_clamped_to_lower_limit(pr2_world_state_reset):
-    connection = pr2_world_state_reset.get_connection_by_name("head_pan_joint")
+    connection = pr2_world_state_reset.get_connection_by_name(PR2Joint.HEAD_PAN)
     dof = connection.dof
     lower = dof.limits.lower.position
     goal_beyond_limit = lower - 2.0
 
-    msc = MotionStatechart()
+    executor = StatechartExecutor(
+        context=StatechartContext(world=pr2_world_state_reset),
+        extensions=[MotionControl()],
+    )
+    statechart = Statechart(context=executor.context)
     joint_goal = JointPositionList(
         goal_state=JointState.from_mapping({connection: goal_beyond_limit})
     )
-    msc.add_node(joint_goal)
+    statechart.add_node(joint_goal)
     end = EndMotion()
-    msc.add_node(end)
-    end.start_condition = joint_goal.observation_variable
+    statechart.add_node(end)
+    end.start_condition = joint_goal.observes_true
 
-    kin_sim = Executor(MotionStatechartContext(world=pr2_world_state_reset))
-    kin_sim.compile(motion_statechart=msc)
-    kin_sim.tick_until_end()
+    executor.compile(statechart=statechart)
+    executor.tick_until_end()
 
     assert np.isclose(connection.position, lower, atol=0.01)
 
 
 def test_joint_above_upper_limit_recovers(pr2_world_state_reset):
-    connection = pr2_world_state_reset.get_connection_by_name("head_pan_joint")
+    connection = pr2_world_state_reset.get_connection_by_name(PR2Joint.HEAD_PAN)
     dof = connection.dof
     lower = dof.limits.lower.position
     upper = dof.limits.upper.position
@@ -97,25 +108,28 @@ def test_joint_above_upper_limit_recovers(pr2_world_state_reset):
     connection.position = upper + 0.5
     goal = 1.0
 
-    msc = MotionStatechart()
+    executor = StatechartExecutor(
+        context=StatechartContext(world=pr2_world_state_reset),
+        extensions=[MotionControl()],
+    )
+    statechart = Statechart(context=executor.context)
     joint_goal = JointPositionList(
         goal_state=JointState.from_mapping({connection: goal})
     )
-    msc.add_node(joint_goal)
+    statechart.add_node(joint_goal)
     end = EndMotion()
-    msc.add_node(end)
-    end.start_condition = joint_goal.observation_variable
+    statechart.add_node(end)
+    end.start_condition = joint_goal.observes_true
 
-    kin_sim = Executor(MotionStatechartContext(world=pr2_world_state_reset))
-    kin_sim.compile(motion_statechart=msc)
-    kin_sim.tick_until_end()
+    executor.compile(statechart=statechart)
+    executor.tick_until_end()
 
     assert np.isclose(connection.position, goal, atol=0.01)
     assert lower <= connection.position <= upper + 0.01
 
 
 def test_joint_below_lower_limit_recovers(pr2_world_state_reset):
-    connection = pr2_world_state_reset.get_connection_by_name("head_pan_joint")
+    connection = pr2_world_state_reset.get_connection_by_name(PR2Joint.HEAD_PAN)
     dof = connection.dof
     lower = dof.limits.lower.position
     upper = dof.limits.upper.position
@@ -123,28 +137,31 @@ def test_joint_below_lower_limit_recovers(pr2_world_state_reset):
     connection.position = lower - 0.5
     goal = -1.0
 
-    msc = MotionStatechart()
+    executor = StatechartExecutor(
+        context=StatechartContext(world=pr2_world_state_reset),
+        extensions=[MotionControl()],
+    )
+    statechart = Statechart(context=executor.context)
     joint_goal = JointPositionList(
         goal_state=JointState.from_mapping({connection: goal})
     )
-    msc.add_node(joint_goal)
+    statechart.add_node(joint_goal)
     end = EndMotion()
-    msc.add_node(end)
-    end.start_condition = joint_goal.observation_variable
+    statechart.add_node(end)
+    end.start_condition = joint_goal.observes_true
 
-    kin_sim = Executor(MotionStatechartContext(world=pr2_world_state_reset))
-    kin_sim.compile(motion_statechart=msc)
-    kin_sim.tick_until_end()
+    executor.compile(statechart=statechart)
+    executor.tick_until_end()
 
     assert np.isclose(connection.position, goal, atol=0.01)
     assert lower - 0.01 <= connection.position <= upper
 
 
 def test_multiple_joints_outside_limits_recover(pr2_world_state_reset):
-    head_pan = pr2_world_state_reset.get_connection_by_name("head_pan_joint")
-    head_tilt = pr2_world_state_reset.get_connection_by_name("head_tilt_joint")
+    head_pan = pr2_world_state_reset.get_connection_by_name(PR2Joint.HEAD_PAN)
+    head_tilt = pr2_world_state_reset.get_connection_by_name(PR2Joint.HEAD_TILT)
     upper_arm_roll = pr2_world_state_reset.get_connection_by_name(
-        "r_upper_arm_roll_joint"
+        PR2Joint.RIGHT_UPPER_ARM_ROLL
     )
 
     head_pan.position = head_pan.dof.limits.upper.position + 0.5
@@ -157,16 +174,19 @@ def test_multiple_joints_outside_limits_recover(pr2_world_state_reset):
         upper_arm_roll: 0.0,
     }
 
-    msc = MotionStatechart()
+    executor = StatechartExecutor(
+        context=StatechartContext(world=pr2_world_state_reset),
+        extensions=[MotionControl()],
+    )
+    statechart = Statechart(context=executor.context)
     joint_goal = JointPositionList(goal_state=JointState.from_mapping(goals))
-    msc.add_node(joint_goal)
+    statechart.add_node(joint_goal)
     end = EndMotion()
-    msc.add_node(end)
-    end.start_condition = joint_goal.observation_variable
+    statechart.add_node(end)
+    end.start_condition = joint_goal.observes_true
 
-    kin_sim = Executor(MotionStatechartContext(world=pr2_world_state_reset))
-    kin_sim.compile(motion_statechart=msc)
-    kin_sim.tick_until_end()
+    executor.compile(statechart=statechart)
+    executor.tick_until_end()
 
     for conn, goal in goals.items():
         lower = conn.dof.limits.lower.position
@@ -183,10 +203,11 @@ def _default_config() -> QPControllerConfig:
     )
 
 
-def _compute_limits(world: World) -> QuadraticProgramDegreeOfFreedomLimits:
-    return QuadraticProgramDegreeOfFreedomLimits.create(
-        world.active_degrees_of_freedom, qp_controller_config=_default_config()
-    )
+def _compute_limits(world: World) -> DirectLimits:
+    return DegreeOfFreedomDecisionVariables(
+        degrees_of_freedom=world.active_degrees_of_freedom,
+        qp_controller_config=_default_config(),
+    ).direct_limits()
 
 
 def _connection(world: World) -> ActiveConnection:
@@ -297,3 +318,36 @@ def test_dof_limits_no_position_limits(prismatic_world_no_position_limits):
     assert np.allclose(
         lower_vel, -VELOCITY_LIMIT, atol=1e-3
     ), "Without position limits, lower velocity bounds must be flat"
+
+
+# %% reaching a position limit
+
+LIMIT_REACHING_TOLERANCE = 1e-3
+
+
+def test_joint_goal_at_upper_limit_is_reached(prismatic_bot):
+    """
+    A joint goal placed exactly on a position limit is reached, instead of the joint
+    stopping short of the limit.
+    """
+    connection = _connection(prismatic_bot)
+    upper = connection.dof.limits.upper.position
+
+    executor = StatechartExecutor(
+        context=StatechartContext(world=prismatic_bot),
+        extensions=[MotionControl(qp_controller_config=_default_config())],
+    )
+    statechart = Statechart(context=executor.context)
+    joint_goal = JointPositionList(
+        goal_state=JointState.from_mapping({connection: upper}),
+        threshold=LIMIT_REACHING_TOLERANCE,
+    )
+    statechart.add_node(joint_goal)
+    end = EndMotion()
+    statechart.add_node(end)
+    end.start_condition = joint_goal.observes_true
+
+    executor.compile(statechart=statechart)
+    executor.tick_until_end()
+
+    assert np.isclose(connection.position, upper, atol=LIMIT_REACHING_TOLERANCE)

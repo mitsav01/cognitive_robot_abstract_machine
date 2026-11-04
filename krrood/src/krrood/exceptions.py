@@ -4,19 +4,41 @@ import ast
 import types
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Type, Tuple
-
-from typing_extensions import Optional
+from typing_extensions import Any, Protocol
 
 
 @dataclass
-class DataclassException(Exception, ABC):
+class CanBehaveLikeDataclassException(Protocol):
+    """
+    A structural template that indicates the matching class is an exception or can be treated as one.
+    """
+
+    @abstractmethod
+    def error_message(self) -> str:
+        """
+        :return: A human-readable description of what went wrong.
+        """
+
+    @abstractmethod
+    def suggest_correction(self) -> str:
+        """
+        :return: Advice on how to fix the error, or an empty string if there is no specific advice.
+        """
+
+
+@dataclass
+class DataclassException(Exception, CanBehaveLikeDataclassException, ABC):
     """
     A base exception class for dataclass-based exceptions.
     Subclasses implement error_message() and suggest_correction(); both are evaluated at
     construction time and composed into the actual exception message (the args passed to
     Exception). A non-empty suggest_correction() is rendered as a trailing "Suggestion: ..." line.
     Subclasses that override __post_init__ must call super().__post_init__() at the end.
+    """
+
+    print_stack_trace: bool = field(default=True, kw_only=True)
+    """
+    Whether the stack trace of this exception should be printed when it is handled.
     """
 
     def __post_init__(self):
@@ -37,21 +59,9 @@ class DataclassException(Exception, ABC):
         # plain message that __post_init__ baked into the args.
         return Exception.__str__(self)
 
-    @abstractmethod
-    def error_message(self) -> str:
-        """
-        :return: A human-readable description of what went wrong.
-        """
-
-    @abstractmethod
-    def suggest_correction(self) -> str:
-        """
-        :return: Advice on how to fix the error, or an empty string if there is no specific advice.
-        """
-
 
 @dataclass
-class InputError(DataclassException):
+class InputError(DataclassException, ABC):
     """
     Raised when there is an error with user input.
     """
@@ -63,17 +73,17 @@ class MismatchingNumberOfGenericParametersAndResolvedTypes(DataclassException):
     Raised when the number of generic parameters does not match the number of resolved types.
     """
 
-    affected_class: Type
+    affected_class: type
     """
     The class that has the generic parameters.
     """
 
-    parameters: list[Type]
+    parameters: list[type]
     """
     The generic parameters of the class.
     """
 
-    resolved_types: Tuple[Type, ...]
+    resolved_types: tuple[type, ...]
     """
     The resolved types for the generic parameters.
     """
@@ -91,16 +101,43 @@ class MismatchingNumberOfGenericParametersAndResolvedTypes(DataclassException):
 
 
 @dataclass
+class UnboundGenericParameter(DataclassException):
+    """
+    Raised when a generic type parameter is read back from a class that binds it to no
+    concrete type.
+    """
+
+    affected_class: type
+    """
+    The class the parameter was read from.
+    """
+
+    parameter: Any
+    """
+    The type parameter that is left unbound.
+    """
+
+    def error_message(self) -> str:
+        return f"{self.affected_class.__name__} binds {self.parameter} to no concrete type."
+
+    def suggest_correction(self) -> str:
+        return (
+            f"Bind it in a subclass, for example "
+            f"class Concrete({self.affected_class.__name__}[SomeType])."
+        )
+
+
+@dataclass
 class ModuleNotFoundForConvertingImportsToAbsolute(InputError):
     """
     Raised when the current module is not given and/or not found for relative import conversion.
     """
 
-    path: Optional[str] = field(kw_only=True, default=None)
+    path: str | None = field(kw_only=True, default=None)
     """
     The path to the file that contains the relative import.
     """
-    source_code: Optional[str] = field(kw_only=True, default=None)
+    source_code: str | None = field(kw_only=True, default=None)
     """
     The source code of the file that contains the relative import.
     """
@@ -121,15 +158,15 @@ class NoSourceDataToParseImportsFrom(InputError):
     Raised when there is no source data given to parse imports from.
     """
 
-    module: Optional[types.ModuleType] = None
+    module: types.ModuleType | None = None
     """
     The module to parse imports from.
     """
-    file_path: Optional[str] = None
+    file_path: str | None = None
     """
     The file path to the module to parse imports from.
     """
-    ast_tree: Optional[ast.AST] = None
+    ast_tree: ast.AST | None = None
     """
     The AST tree to parse imports from.
     """
@@ -151,11 +188,11 @@ class NoModuleSourceProvided(InputError):
     Raised when there is no source module data given to parse imports from.
     """
 
-    imported_module_path: Optional[str] = None
+    imported_module_path: str | None = None
     """
     The file path to the module to parse imports from.
     """
-    module_name: Optional[str] = None
+    module_name: str | None = None
     """
     The module to parse imports from.
     """
@@ -276,15 +313,15 @@ class SourceDataNotProvided(InputError):
     Raised when no source data is provided.
     """
 
-    file_path: Optional[str] = None
+    file_path: str | None = None
     """
     The file path that was missing source data.
     """
-    tree: Optional[ast.AST] = None
+    tree: ast.AST | None = None
     """
     The AST tree that was missing source data.
     """
-    source_code: Optional[str] = None
+    source_code: str | None = None
     """
     The source code that was missing.
     """

@@ -17,7 +17,6 @@ from timeit import default_timer
 from py_trees.common import Status
 from py_trees.behaviour import Behaviour
 from py_trees.blackboard import Blackboard
-from typing_extensions import Dict, List, Type
 
 from robokudo.defs import PACKAGE_NAME
 from robokudo.pipeline import Pipeline
@@ -46,20 +45,22 @@ class VisualizationManager(Behaviour):
         3. Post-tick: Cleanup and synchronization
     """
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, visualizer_types: list[type] | None = None) -> None:
         """Initialize the visualization manager.
 
         :param name: Name of the behavior tree node
+        :param visualizer_types: Visualizer backends to instantiate for every pipeline.
+            Defaults to all of them (CV, Open3D and both ROS visualizers).
         """
         super().__init__(name=name)
 
-        self.pipelines: Dict[str, Pipeline] = {}
+        self.pipelines: dict[str, Pipeline] = {}
         """Mapping of pipeline names to Pipeline objects"""
 
         self.rk_logger: logging.Logger = logging.getLogger(PACKAGE_NAME)
         """Logger instance for this class"""
 
-        self.visualizer_types: List[Type] = [
+        self.visualizer_types: list[type] = visualizer_types or [
             CVVisualizer,
             O3DVisualizer,
             SharedROSVisualizer,
@@ -67,7 +68,7 @@ class VisualizationManager(Behaviour):
         ]
         """List of available visualizer classes"""
 
-        self.visualizers: Dict[str, List[Visualizer]] = {}
+        self.visualizers: dict[str, list[Visualizer]] = {}
         """Mapping of pipeline name to list of Visualizers"""
 
     def create_visualizers_for_pipeline(self, pipeline: Pipeline) -> None:
@@ -90,7 +91,7 @@ class VisualizationManager(Behaviour):
         self.visualizers[pipeline.name] = visualizers
 
     @staticmethod
-    def visualizer_instances() -> List[Visualizer]:
+    def visualizer_instances() -> list[Visualizer]:
         """Get all active visualizer instances.
 
         :returns: List of all active Visualizer instances

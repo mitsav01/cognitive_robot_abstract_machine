@@ -8,7 +8,7 @@ from functools import cached_property
 from textwrap import indent, dedent
 
 from colorama import Fore, Style
-from typing_extensions import Optional, Type, List, Callable, Tuple, Dict, Any, Union
+from typing_extensions import Optional, List, Callable, Tuple, Dict, Any, Union
 
 from krrood.ripple_down_rules.datastructures.case import Case
 from krrood.ripple_down_rules.datastructures.dataclasses import CaseQuery
@@ -17,15 +17,15 @@ from krrood.ripple_down_rules.utils import (
     str_to_snake_case,
     get_imports_from_scope,
     make_list,
-    stringify_hint,
-    extract_function_or_class_file,
     get_types_to_import_from_type_hints,
-    extract_function_or_class_from_source,
 )
-from krrood.utils import get_imports_from_types, get_scope_from_imports
+from krrood.code_generation.imports import get_imports_from_types
+from krrood.code_generation.source_extraction_utils import extract_function_source
+from krrood.code_generation.type_hints import stringify_type_hint
+from krrood.utils import get_scope_from_imports
 
 
-def detect_available_editor() -> Optional[Editor]:
+def detect_available_editor() -> Editor | None:
     """
     Detect the available editor on the system.
 
@@ -65,22 +65,26 @@ FunctionData = Tuple[Optional[List[str]], Optional[Dict[str, Callable]]]
 
 class TemplateFileCreator:
     """
-    A class to create a rule template file for a given case and prompt for the user to edit it.
+    A class to create a rule template file for a given case and prompt for the user to
+    edit it.
     """
 
-    temp_file_path: Optional[str] = None
+    temp_file_path: str | None = None
     """
     The path to the temporary file that is created for the user to edit.
     """
+
     port: int = int(os.environ.get("RDR_EDITOR_PORT", 8080))
     """
     The port to use for the code-server.
     """
-    process: Optional[subprocess.Popen] = None
+
+    process: subprocess.Popen | None = None
     """
     The process of the code-server.
     """
-    all_code_lines: Optional[List[str]] = None
+
+    all_code_lines: list[str] | None = None
     """
     The list of all code lines in the function in the temporary file.
     """
@@ -89,7 +93,7 @@ class TemplateFileCreator:
         self,
         case_query: CaseQuery,
         prompt_for: PromptFor,
-        code_to_modify: Optional[str] = None,
+        code_to_modify: str | None = None,
         print_func: Callable[[str], None] = print,
     ):
         self.print_func = print_func
@@ -101,14 +105,14 @@ class TemplateFileCreator:
         self.func_name: str = self.get_func_name(self.prompt_for, self.case_query)
         self.func_doc: str = self.get_func_doc()
         self.function_signature: str = self.get_function_signature()
-        self.editor: Optional[Editor] = detect_available_editor()
-        self.editor_cmd: Optional[str] = os.environ.get("RDR_EDITOR_CMD")
+        self.editor: Editor | None = detect_available_editor()
+        self.editor_cmd: str | None = os.environ.get("RDR_EDITOR_CMD")
         self.workspace: str = os.environ.get(
             "RDR_EDITOR_WORKSPACE", os.path.dirname(self.case_query.scope["__file__"])
         )
         self.temp_file_path: str = os.path.join(self.workspace, "edit_code_here.py")
 
-    def get_output_type(self) -> List[Type]:
+    def get_output_type(self) -> list[type]:
         """
         :return: The output type of the function as a list of types.
         """
@@ -130,7 +134,7 @@ class TemplateFileCreator:
 
         self.open_file_in_editor()
 
-    def open_file_in_editor(self, file_path: Optional[str] = None):
+    def open_file_in_editor(self, file_path: str | None = None):
         """
         Open the file in the available editor.
         """
@@ -212,14 +216,14 @@ class TemplateFileCreator:
                     self.case_query.function_args_type_hints is not None
                     and k in self.case_query.function_args_type_hints
                 ):
-                    func_args[k] = stringify_hint(
+                    func_args[k] = stringify_type_hint(
                         self.case_query.function_args_type_hints[k]
                     )
                 else:
                     func_args[k] = (
-                        type(v).__name__
+                        stringify_type_hint(type(v))
                         if not isinstance(v, type)
-                        else f"Type[{v.__name__}]"
+                        else f"Type[{stringify_type_hint(v)}]"
                     )
             func_args = ", ".join(
                 [
@@ -281,7 +285,7 @@ class TemplateFileCreator:
         return "\n".join(imports)
 
     @staticmethod
-    def get_core_attribute_types(case_query: CaseQuery) -> List[Type]:
+    def get_core_attribute_types(case_query: CaseQuery) -> list[type]:
         """
         Get the core attribute types of the case query.
 
@@ -294,7 +298,7 @@ class TemplateFileCreator:
         ]
         return attr_types
 
-    def get_func_doc(self) -> Optional[str]:
+    def get_func_doc(self) -> str | None:
         """
         :return: A string containing the function docstring.
         """
@@ -308,7 +312,7 @@ class TemplateFileCreator:
             return f"Get possible value(s) for {self.case_query.name} {type_data}."
 
     @staticmethod
-    def get_func_name(prompt_for, case_query) -> Optional[str]:
+    def get_func_name(prompt_for, case_query) -> str | None:
         func_name = ""
         if prompt_for == PromptFor.Conditions:
             func_name = f"{prompt_for.value.lower()}_for_"
@@ -323,7 +327,7 @@ class TemplateFileCreator:
         return str_to_snake_case(func_name)
 
     @cached_property
-    def case_type(self) -> Type:
+    def case_type(self) -> type:
         """
         Get the type of the case object in the current scope.
 
@@ -342,8 +346,9 @@ class TemplateFileCreator:
         :param file_path: The path to the file to load.
         :param func_name: The name of the function to load.
         :param print_func: The function to use for printing messages.
-        :return: A tuple containing the function source code and the function object as a dictionary
-        with the function name as the key and the function object as the value.
+        :return: A tuple containing the function source code and the function object as
+            a dictionary with the function name as the key and the function object as
+            the value.
         """
         if not file_path:
             print_func(
@@ -373,9 +378,12 @@ class TemplateFileCreator:
                 )
                 break
         if updates:
-            all_code_lines = extract_function_or_class_from_source(
-                source, [func_name], join_lines=False
-            )[func_name]
+            extracted_function = extract_function_source([func_name], source=source)
+            all_code_lines = next(
+                definition.lines
+                for definition in extracted_function.definitions
+                if definition.name == func_name
+            )
             return all_code_lines, updates
         else:
             print_func(

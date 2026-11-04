@@ -10,8 +10,8 @@ from semantic_digital_twin.adapters.mesh import STLParser
 from semantic_digital_twin.collision_checking.pybullet_collision_detector import (
     clear_cache,
     convert_to_decomposed_obj_and_save_in_tmp,
-    create_cache_dir,
 )
+from semantic_digital_twin.utils import create_cache_dir
 from semantic_digital_twin.pipeline.mesh_decomposition.bullet_vhacd import (
     BulletVHACDMeshDecomposer,
 )
@@ -27,7 +27,7 @@ def load_non_convex_mesh():
         "stl",
         "jeroen_cup.stl",
     )
-    body: Body = STLParser(stl_path).parse().root
+    body: Body = STLParser(stl_path).create_world().root
     return body.collision[0]
 
 

@@ -5,15 +5,7 @@ from _weakref import ref as weakref_ref
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
-from typing_extensions import (
-    Optional,
-    Union,
-    Dict,
-    Type,
-    Generic,
-    TYPE_CHECKING,
-    TypeVar,
-)
+from typing_extensions import Generic, TYPE_CHECKING, TypeVar
 
 from krrood.symbol_graph.symbol_graph import Symbol
 
@@ -23,7 +15,7 @@ if TYPE_CHECKING:
     )
 
 
-monitored_type_map: Dict[Type, Type[MonitoredContainer]] = {}
+monitored_type_map: dict[type, type[MonitoredContainer]] = {}
 """
 A mapping of container types to their monitored container types.
 """
@@ -75,7 +67,7 @@ class MonitoredContainer(Generic[T], ABC):
 
     def __init__(self, *args, descriptor: PropertyDescriptor, **kwargs):
         self._descriptor: PropertyDescriptor = descriptor
-        self._owner_ref: Optional[weakref.ref[Symbol]] = None
+        self._owner_ref: weakref.ref[Symbol] | None = None
         super().__init__(*args, **kwargs)
 
     def _bind_owner(self, owner) -> MonitoredContainer:
@@ -97,19 +89,24 @@ class MonitoredContainer(Generic[T], ABC):
         value: Symbol,
         inferred: bool = False,
         add_relation_to_the_graph: bool = True,
-    ) -> Union[Symbol, weakref.ref[Symbol]]:
-        """Call the descriptor on_add with the concrete owner instance
+    ) -> Symbol | weakref.ref[Symbol]:
+        """
+        Call the descriptor on_add with the concrete owner instance.
 
         :param value: The value to be added to the container
         :param inferred: Whether the value is inferred or not
-        :param add_relation_to_the_graph: Whether to add the relation to the graph or not.
-        :return: The value with a weakref if inferred is True, otherwise the value itself
+        :param add_relation_to_the_graph: Whether to add the relation to the graph or
+            not.
+        :return: The value with a weakref if inferred is True, otherwise the value
+            itself
         """
         if inferred:
             value = weakref.ref(value, self._remove_item)
         owner = self._owner
         if owner is not None and add_relation_to_the_graph:
-            self._descriptor.add_relation_to_the_graph(owner, value, inferred=inferred)
+            self._descriptor.add_relation_to_the_graph_and_apply_implications(
+                owner, value, inferred=inferred
+            )
         return value
 
     def _update(
@@ -123,7 +120,8 @@ class MonitoredContainer(Generic[T], ABC):
 
         :param value: The value to be added to the container
         :param inferred: If the value is inferred or not
-        :param add_relation_to_the_graph: Whether to add the relation to the graph or not
+        :param add_relation_to_the_graph: Whether to add the relation to the graph or
+            not
         :return: Whether the value was added or not
         """
         if value in self:
@@ -138,8 +136,9 @@ class MonitoredContainer(Generic[T], ABC):
     @abstractmethod
     def _remove_item(self, item):
         """
-        This method is called when an item is removed from the container. It should be implemented by subclasses.
+        This method is called when an item is removed from the container.
 
+        It should be implemented by subclasses.
         :param item: The item to be removed
         """
         ...
@@ -152,8 +151,10 @@ class MonitoredContainer(Generic[T], ABC):
         add_relation_to_the_graph: bool = True,
     ):
         """
-        This method is called when an item is added to the container. It should be implemented by subclasses.
-        In addition, this method should call the descriptor on_add method.
+        This method is called when an item is added to the container.
+
+        It should be implemented by subclasses. In addition, this method should call the
+        descriptor on_add method.
 
         :param item: The item to be added
         :param inferred: Whether the value is inferred or not
@@ -163,7 +164,7 @@ class MonitoredContainer(Generic[T], ABC):
 
     @classmethod
     @abstractmethod
-    def _get_monitored_type(cls) -> Type:
+    def _get_monitored_type(cls) -> type:
         """
         Get the monitored container type (i.e., the original container type)
         """

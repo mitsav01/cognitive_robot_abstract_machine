@@ -1,91 +1,121 @@
-from __future__ import division
+from __future__ import annotations
 
 from dataclasses import dataclass
 
-from giskardpy.motion_statechart.data_types import DefaultWeights
-from giskardpy.motion_statechart.graph_node import Task
-from semantic_digital_twin.spatial_types import Point3, Vector3
+from giskardpy.motion_statechart.weights import DefaultWeights
+from giskardpy.motion_statechart.graph_node import MotionNodeArtifacts, ConvergingTask
+from krrood_spatial_math.spatial_types import Point3, Vector3
 from semantic_digital_twin.world_description.world_entity import Body
 
 
-@dataclass
-class GraspBar(Task):
-    root_link: Body
-    tip_link: Body
-    tip_grasp_axis: Vector3
-    bar_center: Point3
-    bar_axis: Vector3
-    bar_length: float
-    threshold: float = 0.01
-    reference_linear_velocity: float = 0.1
-    reference_angular_velocity: float = 0.5
-    weight: float = DefaultWeights.WEIGHT_ABOVE_CA
+@dataclass(eq=False, repr=False, kw_only=True)
+class GraspBar(ConvergingTask):
+    """
+    Like a CartesianPose but with more freedom: the tip link is allowed to be at any
+    point along the bar axis within ``bar_center +/- bar_length / 2``.
 
-    def __post_init__(self):
+    It aligns ``tip_grasp_axis`` with ``bar_axis`` while allowing rotation around it.
+    """
+
+    root_link: Body
+    """
+    Root link of the kinematic chain.
+    """
+
+    tip_link: Body
+    """
+    Tip link of the kinematic chain.
+    """
+
+    tip_grasp_axis: Vector3
+    """
+    Axis of the tip link that will be aligned with the bar axis.
+    """
+
+    bar_center: Point3
+    """
+    Center of the bar to be grasped.
+    """
+
+    bar_axis: Vector3
+    """
+    Alignment of the bar to be grasped.
+    """
+
+    bar_length: float
+    """
+    Length of the bar to be grasped.
+    """
+
+    threshold: float = 0.01
+    """
+    Distance threshold to the bar for goal achievement in meters.
+    """
+
+    reference_linear_velocity: float = 0.1
+    """
+    Reference linear velocity for normalization in m/s.
+    """
+
+    reference_angular_velocity: float = 0.5
+    """
+    Reference angular velocity for normalization in rad/s.
+    """
+
+    weight: float = DefaultWeights.WEIGHT_ABOVE_COLLISION_AVOIDANCE
+    """
+    Priority weight relative to other tasks.
+    """
+
+    def build_artifacts(self) -> MotionNodeArtifacts:
         """
-        Like a CartesianPose but with more freedom.
-        tip_link is allowed to be at any point along bar_axis, that is without bar_center +/- bar_length.
-        It will align tip_grasp_axis with bar_axis, but allows rotation around it.
-        :param root_link: root link of the kinematic chain
-        :param tip_link: tip link of the kinematic chain
-        :param tip_grasp_axis: axis of tip_link that will be aligned with bar_axis
-        :param bar_center: center of the bar to be grasped
-        :param bar_axis: alignment of the bar to be grasped
-        :param bar_length: length of the bar to be grasped
-        :param reference_linear_velocity: m/s
-        :param reference_angular_velocity: rad/s
-        :param weight:
+        Build motion constraints that pull the tip onto the bar.
+
+        :return: The artifacts of this task, whose error is the distance between the tip
+            and the bar segment.
         """
-        bar_center = context.world.transform(
+        artifacts = MotionNodeArtifacts()
+        root_P_bar_center = self.context.world.transform(
             target_frame=self.root_link, spatial_object=self.bar_center
         )
 
-        tip_grasp_axis = context.world.transform(
+        tip_V_tip_grasp_axis = self.context.world.transform(
             target_frame=self.tip_link, spatial_object=self.tip_grasp_axis
         )
-        tip_grasp_axis.scale(1)
+        tip_V_tip_grasp_axis.scale(1)
 
-        bar_axis = context.world.transform(
+        root_V_bar_axis = self.context.world.transform(
             target_frame=self.root_link, spatial_object=self.bar_axis
         )
-        bar_axis.scale(1)
+        root_V_bar_axis.scale(1)
 
-        self.bar_axis = bar_axis
-        self.tip_grasp_axis = tip_grasp_axis
-        self.bar_center = bar_center
-
-        root_V_bar_axis = self.bar_axis
-        tip_V_tip_grasp_axis = self.tip_grasp_axis
-        root_P_bar_center = self.bar_center
-
-        root_T_tip = context.world._forward_kinematic_manager.compose_expression(
+        root_T_tip = self.context.world.compose_forward_kinematics_expression(
             self.root_link, self.tip_link
         )
         root_V_tip_normal = root_T_tip @ tip_V_tip_grasp_axis
 
-        self.add_vector_goal_constraints(
+        artifacts.geometry.add_vector_goal_constraints(
             frame_V_current=root_V_tip_normal,
             frame_V_goal=root_V_bar_axis,
             reference_velocity=self.reference_angular_velocity,
-            weight=self.weight,
+            quadratic_weight=self.weight,
         )
 
-        root_P_tip = context.world._forward_kinematic_manager.compose_expression(
-            self.root_link, self.tip_link
-        ).to_position()
+        root_P_tip = root_T_tip.position
 
         root_P_line_start = root_P_bar_center + root_V_bar_axis * self.bar_length / 2
         root_P_line_end = root_P_bar_center - root_V_bar_axis * self.bar_length / 2
 
-        dist, nearest = root_P_tip.distance_to_line_segment(
+        distance, nearest = root_P_tip.distance_to_line_segment(
             root_P_line_start, root_P_line_end
         )
 
-        self.add_point_goal_constraints(
-            frame_P_current=root_T_tip.to_position(),
+        artifacts.geometry.add_point_goal_constraints(
+            frame_P_current=root_P_tip,
             frame_P_goal=nearest,
             reference_velocity=self.reference_linear_velocity,
-            weight=self.weight,
+            quadratic_weight=self.weight,
         )
 
-        self.observation_expression = dist <= self.threshold
+        artifacts.error = distance
+        return artifacts

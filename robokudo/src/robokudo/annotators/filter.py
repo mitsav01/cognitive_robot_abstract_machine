@@ -17,8 +17,10 @@ The module is used for:
 * Conditional processing
 """
 
+from __future__ import annotations
+
 from py_trees.common import Status
-from typing_extensions import Optional, Tuple, Dict, Callable
+from typing_extensions import Callable
 
 from robokudo.annotators.core import BaseAnnotator
 
@@ -43,13 +45,13 @@ class FilterAnnotator(BaseAnnotator):
             """Parameter container for filter configuration."""
 
             def __init__(self) -> None:
-                self.func: Optional[Callable] = None
+                self.func: Callable | None = None
                 """Filter function to apply"""
 
-                self.func_args: Optional[Tuple] = None
+                self.func_args: tuple | None = None
                 """Positional arguments for filter function"""
 
-                self.func_kwargs: Optional[Dict] = None
+                self.func_kwargs: dict | None = None
                 """Keyword arguments for filter function"""
 
         # overwrite the parameters explicitly to enable auto-completion
@@ -58,12 +60,12 @@ class FilterAnnotator(BaseAnnotator):
     def __init__(
         self,
         name: str = "FilterAnnotator",
-        descriptor: "FilterAnnotator.Descriptor" = Descriptor(),
+        descriptor: FilterAnnotator.Descriptor | None = None,
     ) -> None:
         """Initialize the filter annotator.
 
-        :param name: Annotator name, defaults to "FilterAnnotator"
-        :param descriptor: Configuration descriptor, defaults to Descriptor()
+        :param name: Annotator name
+        :param descriptor: Configuration descriptor
         """
         super().__init__(name, descriptor)
         self.logger.debug("%s.__init__()" % self.__class__.__name__)
@@ -83,12 +85,12 @@ class FilterAnnotator(BaseAnnotator):
             func_args = self.descriptor.parameters.func_args or []
             func_kwargs = self.descriptor.parameters.func_kwargs or {}
 
-            annotations = self.get_cas().annotations
-            annotations = [
+            temporary_annotations = self.get_cas().annotations
+            temporary_annotations = [
                 annotation
-                for annotation in annotations
+                for annotation in temporary_annotations
                 if func(annotation, *func_args, **func_kwargs)
             ]
-            self.get_cas().annotations = annotations
+            self.get_cas().annotations = temporary_annotations
 
         return Status.SUCCESS

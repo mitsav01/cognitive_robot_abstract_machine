@@ -5,12 +5,6 @@ from dataclasses import dataclass
 from krrood.exceptions import DataclassException
 
 
-class DontPrintStackTrace:
-    """
-    Marker mixin for exceptions whose stack trace should not be printed.
-    """
-
-
 @dataclass
 class GiskardException(DataclassException):
     """
@@ -26,6 +20,34 @@ class SetupException(GiskardException):
 
 
 @dataclass
+class UnpairedKinematicChainParametersError(SetupException):
+    """
+    Raised when the ``root_links`` and ``tip_links`` parameters differ in length, so
+    their entries cannot be paired into kinematic chains.
+    """
+
+    root_links: list[str]
+    """
+    The root link names that were declared.
+    """
+
+    tip_links: list[str]
+    """
+    The tip link names that were declared.
+    """
+
+    def error_message(self) -> str:
+        return (
+            "root_links and tip_links must have the same length; "
+            f"got {len(self.root_links)} root links {self.root_links} and "
+            f"{len(self.tip_links)} tip links {self.tip_links}."
+        )
+
+    def suggest_correction(self) -> str:
+        return "Declare one tip link for every root link, in the same order."
+
+
+@dataclass
 class PlanningException(GiskardException):
     """
     Base class for errors that occur while planning a motion.
@@ -38,11 +60,52 @@ class MissingActionResultError(GiskardException):
     Raised when a result message is requested before one has been set.
     """
 
+    action_server_name: str
+    """
+    The name of the action server whose result was requested.
+    """
+
+    goal_id: int
+    """
+    The id of the goal whose result was requested.
+    """
+
     def error_message(self) -> str:
-        return "No result message set."
+        return (
+            f"'{self.action_server_name}' goal #{self.goal_id} has no result message."
+        )
 
     def suggest_correction(self) -> str:
         return "You tried to access something before it was set."
+
+
+@dataclass
+class MissingGoalOutcomeError(GiskardException):
+    """
+    Raised when a goal is answered without having been marked succeeded, aborted or
+    canceled.
+    """
+
+    action_server_name: str
+    """
+    The name of the action server whose goal is being answered.
+    """
+
+    goal_id: int
+    """
+    The id of the goal that is being answered.
+    """
+
+    def error_message(self) -> str:
+        return (
+            f"'{self.action_server_name}' goal #{self.goal_id} is being answered "
+            f"without an outcome."
+        )
+
+    def suggest_correction(self) -> str:
+        return (
+            "Mark the goal as succeeded, aborted or canceled before sending its result."
+        )
 
 
 @dataclass
@@ -77,16 +140,6 @@ class NoControlledJointsError(SetupException):
 
 
 @dataclass
-class JointRegistrationRequiresStandaloneModeError(SetupException):
-    """
-    Raised when joints are registered outside of StandAlone mode.
-    """
-
-    def error_message(self) -> str:
-        return "Joints only need to be registered in StandAlone mode."
-
-    def suggest_correction(self) -> str:
-        return "Remove the manual registration. For real robots, the joints are retrieved from the connected controllers."
 
 
 @dataclass
@@ -99,7 +152,7 @@ class MaxTrajectoryLengthException(PlanningException):
         return "Trajectory exceeded the maximum allowed length."
 
     def suggest_correction(self) -> str:
-        return "Look at the final state of the MotionStatechart to see which nodes are still running. Use the debugger or the MotionStatechart.draw() method to visualize the MotionStatechart."
+        return "Look at the final state of the Statechart to see which nodes are still running. Use the debugger or the Statechart.draw() method to visualize the Statechart."
 
 
 @dataclass

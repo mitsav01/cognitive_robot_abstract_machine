@@ -1,8 +1,8 @@
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Tuple
 import json
 
 from probabilistic_model.probabilistic_model import ProbabilisticModel
+from probabilistic_model.query_results import Mode
 from probabilistic_model.probabilistic_circuit.rx.probabilistic_circuit import (
     ProbabilisticCircuit,
 )
@@ -15,24 +15,26 @@ class ModelController:
     Controller for managing the state and operations of a ProbabilisticModel.
     """
 
-    model: Optional[ProbabilisticModel] = None
+    model: ProbabilisticModel | None = None
     """
     The probabilistic model being managed.
     """
 
-    variable_map: Dict[str, Variable] = field(default_factory=dict)
+    variable_map: dict[str, Variable] = field(default_factory=dict)
     """
     A mapping from variable names to variable objects.
     """
 
-    priors: Optional[VariableMap] = None
+    priors: VariableMap | None = None
     """
     The prior distributions for all variables in the model.
     """
 
     def __post_init__(self):
         """
-        Initializes the controller. If a model is provided, sets it.
+        Initializes the controller.
+
+        If a model is provided, sets it.
         """
         if self.model:
             self.set_model(self.model)
@@ -80,7 +82,7 @@ class ModelController:
         prob_joint = self.model.probability(joint)
         return prob_joint / prob_evidence
 
-    def calculate_posterior(self, evidence: Event) -> Optional[ProbabilisticModel]:
+    def calculate_posterior(self, evidence: Event) -> ProbabilisticModel | None:
         """
         Calculates the posterior distribution given evidence.
         """
@@ -92,14 +94,14 @@ class ModelController:
             return self.model
 
         try:
-            conditioned_model, probability = self.model.truncated(evidence)
-            if probability == 0:
+            truncation = self.model.truncated(evidence)
+            if truncation.probability == 0:
                 return None
-            return conditioned_model
+            return truncation.distribution
         except Exception:
             return None
 
-    def calculate_mode(self, evidence: Event) -> Optional[Tuple[Event, float]]:
+    def calculate_mode(self, evidence: Event) -> Mode | None:
         """
         Calculates the mode of the model given evidence.
         """
@@ -111,10 +113,11 @@ class ModelController:
             return self.model.mode()
 
         try:
-            conditioned_model, probability = self.model.truncated(evidence)
-            if probability == 0:
+            truncation = self.model.truncated(evidence)
+            if truncation.probability == 0:
                 return None
-            return conditioned_model.mode()
+            return truncation.distribution.mode()
+
         except Exception:
             return None
 

@@ -4,19 +4,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field, fields
 from functools import cached_property, lru_cache
 
-from typing_extensions import (
-    ClassVar,
-    Set,
-    Type,
-    Optional,
-    Any,
-    Iterable,
-    Dict,
-    Union,
-    Tuple,
-    List,
-    DefaultDict,
-)
+from typing_extensions import ClassVar, Any, Iterable, Dict, List
 
 from krrood.ontomatic.property_descriptor.monitored_container import (
     MonitoredContainer,
@@ -26,16 +14,20 @@ from krrood.ontomatic.property_descriptor.property_descriptor_relation import (
     PropertyDescriptorRelation,
 )
 from krrood.ontomatic.failures import UnMonitoredContainerTypeForDescriptor
-from krrood.class_diagrams.class_diagram import WrappedClass, Association
+from krrood.class_diagrams.class_diagram import (
+    WrappedClass,
+    Association,
+    AssociationThroughRoleTaker,
+)
 from krrood.class_diagrams.wrapped_field import WrappedField
 from krrood.entity_query_language.predicate import Symbol
 from krrood.symbol_graph.symbol_graph import (
     SymbolGraph,
 )
 from krrood.entity_query_language.utils import make_set
-from krrood.utils import memoize
+from krrood.patterns.caching import memoize
 
-SymbolType = Type[Symbol]
+SymbolType = type[Symbol]
 """
 Type alias for symbol types.
 """
@@ -101,18 +93,18 @@ class PropertyDescriptor(Symbol):
     The wrapped field instance that this descriptor instance manages.
     """
     domain_range_map: ClassVar[
-        DefaultDict[Type[PropertyDescriptor], DomainRangeMap]
+        defaultdict[type[PropertyDescriptor], DomainRangeMap]
     ] = defaultdict(dict)
     """
     A mapping from descriptor class to the mapping from domain types to range types for that descriptor class.
     """
-    all_domains: ClassVar[Dict[Type[PropertyDescriptor], Set[SymbolType]]] = (
+    all_domains: ClassVar[dict[type[PropertyDescriptor], set[SymbolType]]] = (
         defaultdict(set)
     )
     """
     A set of all domain types for this descriptor class.
     """
-    all_ranges: ClassVar[Dict[Type[PropertyDescriptor], Set[SymbolType]]] = defaultdict(
+    all_ranges: ClassVar[dict[type[PropertyDescriptor], set[SymbolType]]] = defaultdict(
         set
     )
     """
@@ -177,11 +169,12 @@ class PropertyDescriptor(Symbol):
         """
         return self.domain_range_map[self.__class__][self.domain]
 
-    def add_relation_to_the_graph(
+    def add_relation_to_the_graph_and_apply_implications(
         self, domain_value: Symbol, range_value: Symbol, inferred: bool = False
     ) -> None:
         """
-        Add the relation between the domain_value and the range_value to the symbol graph.
+        Add the relation between the domain_value and the range_value to the symbol graph and apply all implications of
+        the relation.
 
         :param domain_value: The domain value (i.e., the instance that this descriptor is attached to).
         :param range_value: The range value (i.e., the value to set on the managed attribute, and is the target of the
@@ -192,7 +185,7 @@ class PropertyDescriptor(Symbol):
             for v in make_set(range_value):
                 PropertyDescriptorRelation(
                     domain_value, v, self.wrapped_field, inferred=inferred
-                ).add_to_graph()
+                ).add_to_graph_and_apply_implications()
 
     def __get__(self, obj, objtype=None):
         """
@@ -210,7 +203,7 @@ class PropertyDescriptor(Symbol):
 
     @staticmethod
     def _bind_owner_if_container_type(
-        value: Union[Iterable[Symbol], Symbol], owner: Optional[Any] = None
+        value: Iterable[Symbol] | Symbol, owner: Any | None = None
     ):
         """
         Bind the owner instance to the monitored container if the value is a MonitoredContainer type.
@@ -225,8 +218,8 @@ class PropertyDescriptor(Symbol):
             value._bind_owner(owner)
 
     def _ensure_monitored_type(
-        self, value: Union[Iterable[Symbol], Symbol], obj: Optional[Any] = None
-    ) -> Union[MonitoredContainer[Symbol], Symbol]:
+        self, value: Iterable[Symbol] | Symbol, obj: Any | None = None
+    ) -> MonitoredContainer[Symbol] | Symbol:
         """
         Ensure that the value is a monitored container type or is not iterable.
 
@@ -267,7 +260,7 @@ class PropertyDescriptor(Symbol):
                 attr._add_item(v, inferred=False)
         else:
             setattr(obj, self.private_attr_name, value)
-            self.add_relation_to_the_graph(obj, value)
+            self.add_relation_to_the_graph_and_apply_implications(obj, value)
 
     def update_value(
         self,
@@ -290,74 +283,49 @@ class PropertyDescriptor(Symbol):
 
     @classmethod
     @memoize
-    def get_associated_field_of_domain_type(
+    def get_association_of_source_type(
         cls,
-        domain_type: Union[Type[Symbol], WrappedClass],
-    ) -> Optional[WrappedField]:
+        domain_type: type[Symbol] | WrappedClass,
+    ) -> Association | AssociationThroughRoleTaker | None:
         """
-        Get the field of the domain type that is associated with this descriptor class.
+        Get the association that has as a source the given domain type and as a field type this descriptor class.
 
         :param domain_type: The domain type that has an associated field with this descriptor class.
         """
         class_diagram = SymbolGraph().class_diagram
         association_condition = (
-            lambda association: type(association.field.property_descriptor) is cls
+            lambda association: type(association.wrapped_field.property_descriptor)
+            is cls
         )
         result = next(
-            iter(
-                class_diagram.get_associations_with_condition(
-                    domain_type, association_condition
-                )
+            class_diagram.get_outgoing_associations_with_condition(
+                domain_type, association_condition
             ),
             None,
         )
-        return result.field if result else None
+        return result
 
     @classmethod
     @memoize
-    def get_fields_of_superproperties_in_role_taker_of_class(
+    def get_superproperties_associations(
         cls,
-        domain_type: Union[SymbolType, WrappedClass],
-    ) -> Tuple[Optional[WrappedField], List[WrappedField]]:
+        domain_type: SymbolType | WrappedClass,
+    ) -> tuple[Association, ...]:
         """
-        Return the role-taker field and all associated fields that are superproperties of this descriptor class.
-
-        :param domain_type: The domain type that has a role-taker, where the role-taker has associated fields with the
-         super properties of this descriptor class.
-        """
-        class_diagram = SymbolGraph().class_diagram
-        role_taker_assoc = class_diagram.get_role_taker_associations_of_cls(domain_type)
-        if role_taker_assoc:
-            role_taker_fields = cls.get_fields_of_superproperties(
-                role_taker_assoc.target
-            )
-            return role_taker_assoc.field, list(role_taker_fields)
-        return None, []
-
-    @classmethod
-    @memoize
-    def get_fields_of_superproperties(
-        cls,
-        domain_type: Union[SymbolType, WrappedClass],
-    ) -> Tuple[WrappedField, ...]:
-        """
-        Get the fields of the domain type that are associated with the super classes of this descriptor class.
-
-        :param domain_type: The domain type that has an associated field with the super classes of this descriptor class.
+        :param domain_type: The domain type that has the required association(s).
+        :return: The associations that have the given domain type as a source and have a descriptor type that
+         is a super class of this descriptor class.
         """
 
         def association_condition(association: Association) -> bool:
             return (
-                issubclass(cls, type(association.field.property_descriptor))
-                and type(association.field.property_descriptor) is not cls
+                issubclass(cls, type(association.wrapped_field.property_descriptor))
+                and type(association.wrapped_field.property_descriptor) is not cls
             )
 
         class_diagram = SymbolGraph().class_diagram
 
-        association_fields = [
-            assoc.field
-            for assoc in class_diagram.get_associations_with_condition(
-                domain_type, association_condition
-            )
-        ]
-        return tuple(association_fields)
+        associations_generator = class_diagram.get_outgoing_associations_with_condition(
+            domain_type, association_condition
+        )
+        return tuple(associations_generator)

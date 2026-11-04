@@ -1,7 +1,6 @@
 import json
 from dataclasses import dataclass, field
 from time import time, sleep
-from typing import Optional
 
 from rclpy.node import Node
 from rclpy.service import Service
@@ -12,18 +11,16 @@ from semantic_digital_twin.adapters.world_entity_kwargs_tracker import (
 )
 from semantic_digital_twin.world import World
 from semantic_digital_twin.adapters.ros.messages import WorldModelSnapshot
+from semantic_digital_twin.adapters.ros.ros2_node import HasROS2Node
 
 
 @dataclass
-class FetchWorldServer:
+class FetchWorldServer(HasROS2Node):
     """
-    A ros service that allows other processes to fetch the entire world modification list from this world.
-    The modification list is sent via a JSON string message.
-    """
+    A ros service that allows other processes to fetch the entire world modification
+    list from this world.
 
-    node: Node
-    """
-    The rclpy node used to create the service.
+    The modification list is sent via a JSON string message.
     """
 
     world: World
@@ -36,7 +33,7 @@ class FetchWorldServer:
     The name of the service.
     """
 
-    service: Optional[Service] = field(default=None, init=False)
+    service: Service | None = field(default=None, init=False)
     """
     The ROS service object.
     """
@@ -77,7 +74,8 @@ class FetchWorldServer:
 
     def get_payload_as_json(self) -> str:
         """
-        Serialize both the world modification blocks and a snapshot of the current state.
+        Serialize both the world modification blocks and a snapshot of the current
+        state.
 
         The returned JSON has the structure:
         {
@@ -123,11 +121,13 @@ def fetch_world_from_service(
 ) -> World:
     """
     Fetch a world from any WorldFetcher Service.
-    This method discovers all available WorldFetcher Services in the ROS2 network and picks the first one to get all
-    world modification blocks from it.
+
+    This method discovers all available WorldFetcher Services in the ROS2 network and
+    picks the first one to get all world modification blocks from it.
 
     :param node: The ROS2 node to use for communication.
-    :param service_suffix: The suffix (last part behind '/') of the WorldFetcher services to look for.
+    :param service_suffix: The suffix (last part behind '/') of the WorldFetcher
+        services to look for.
     :param timeout_seconds: Maximum time to wait for service availability and response.
     :return: The fetched modification blocks.
     """

@@ -5,10 +5,11 @@ boundaries for object hypotheses. It can grow or shrink ROIs and their associate
 masks by a specified pixel offset.
 """
 
+from __future__ import annotations
+
 from timeit import default_timer
 
 from py_trees.common import Status
-from typing_extensions import Type
 
 from robokudo.annotators.core import BaseAnnotator
 from robokudo.cas import CASViews
@@ -35,7 +36,7 @@ class ROIAdjusterAnnotator(BaseAnnotator):
                 self.offset_pixel: int = 20
                 """Pixels to add/subtract from ROI sides (positive grows, negative shrinks)"""
 
-                self.analysis_scope: Type = ObjectHypothesis
+                self.analysis_scope: type = ObjectHypothesis
                 """Type of annotations to process."""
 
                 self.fill_value_mask: int = 0
@@ -47,12 +48,12 @@ class ROIAdjusterAnnotator(BaseAnnotator):
     def __init__(
         self,
         name: str = "ROIAdjusterAnnotator",
-        descriptor: "ROIAdjusterAnnotator.Descriptor" = Descriptor(),
+        descriptor: ROIAdjusterAnnotator.Descriptor | None = None,
     ) -> None:
         """Initialize the ROI adjuster.
 
-        :param name: Name of the annotator instance, defaults to "ROIAdjusterAnnotator"
-        :param descriptor: Configuration descriptor, defaults to Descriptor()
+        :param name: Name of the annotator instance
+        :param descriptor: Configuration descriptor
         """
         super().__init__(name, descriptor)
 

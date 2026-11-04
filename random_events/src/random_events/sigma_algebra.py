@@ -1,9 +1,10 @@
 from __future__ import annotations
+import copy
+import math
 from abc import abstractmethod, ABC
 from dataclasses import dataclass, field, InitVar
-from typing import Tuple, Dict, Any, Optional
+from typing_extensions import Self, Iterable, Any
 import random_events_lib as rl
-from typing_extensions import Self, Iterable
 
 from krrood.adapters.json_serializer import SubclassJSONSerializer
 from random_events.utils import CPPWrapper
@@ -59,8 +60,21 @@ class AbstractSimpleSet(CPPWrapper, SubclassJSONSerializer, ABC):
     def contains(self, item) -> bool:
         """
         Check if this set contains an item.
+
         :param item: The item to check
         :return: Rather if the item is in the set or not
+        """
+        raise NotImplementedError
+
+    @property
+    @abstractmethod
+    def size(self) -> float:
+        """
+        The size the algebra this set belongs to assigns it: the length of an interval,
+        the number of elements of a set of elements, and the product of those over the
+        variables of a set of tuples.
+
+        :return: The size of this set, which is infinite when it is unbounded.
         """
         raise NotImplementedError
 
@@ -112,7 +126,11 @@ class AbstractSimpleSet(CPPWrapper, SubclassJSONSerializer, ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def __deepcopy__(self):
+    def __deepcopy__(self, memo: dict[int, Any] | None = None) -> Self:
+        """
+        :param memo: The objects already copied during this deep copy, by their id.
+        :return: An equal set that shares no mutable state with this one.
+        """
         raise NotImplementedError
 
 
@@ -121,10 +139,10 @@ class AbstractCompositeSet(CPPWrapper, SubclassJSONSerializer, ABC):
     """
     Abstract class for composite sets.
 
-    AbstractCompositeSet is a set composed of a union of simple sets.
-    If any operation is called on this, the resulting union will also be disjoint and simplified.
-    A simplified composite set is a set with as few simple sets in it as possible
-    to represent the necessary information.
+    AbstractCompositeSet is a set composed of a union of simple sets. If any operation
+    is called on this, the resulting union will also be disjoint and simplified. A
+    simplified composite set is a set with as few simple sets in it as possible to
+    represent the necessary information.
 
     This class wraps the C++ class AbstractCompositeSet.
     """
@@ -134,22 +152,26 @@ class AbstractCompositeSet(CPPWrapper, SubclassJSONSerializer, ABC):
     simple_set_example: AbstractSimpleSet
     """
     An example of a simple set that is used to create new simple sets.
+
     Fields that are python only are read from this instance when reading from cpp.
     """
 
-    _simple_sets_cache: Optional[tuple] = field(
+    _simple_sets_cache: tuple | None = field(
         default=None, init=False, repr=False, compare=False
     )
     """
-    Lazy cache for simple_sets. Events are immutable after construction, so this
-    is safe. Avoids O(N) Python wrapper creation on every repeated access.
+    Lazy cache for simple_sets.
+
+    Events are immutable after construction, so this is safe. Avoids O(N) Python wrapper
+    creation on every repeated access.
     """
 
     @classmethod
     @abstractmethod
-    def from_simple_sets(cls, *simple_sets: Tuple[AbstractSimpleSet, ...]) -> Self:
+    def from_simple_sets(cls, *simple_sets: tuple[AbstractSimpleSet, ...]) -> Self:
         """
         Create a composite set from simple sets.
+
         :param simple_sets: The simple sets that make up the union.
         """
         raise NotImplementedError
@@ -240,6 +262,20 @@ class AbstractCompositeSet(CPPWrapper, SubclassJSONSerializer, ABC):
                 return True
         return False
 
+    @property
+    def size(self) -> float:
+        """
+        The size of the union this set describes, which is additive over disjoint simple
+        sets.
+
+        The union is made disjoint first, so a part covered by several simple sets is
+        counted once.
+
+        :return: The size of this set, which is infinite when it is unbounded.
+        """
+        disjoint = self if self.is_disjoint() else self.make_disjoint()
+        return math.fsum(simple_set.size for simple_set in disjoint.simple_sets)
+
     def __contains__(self, item) -> bool:
         return self.contains(item)
 
@@ -301,9 +337,10 @@ class AbstractCompositeSet(CPPWrapper, SubclassJSONSerializer, ABC):
     def __lt__(self, other: Self):
         """
         Compare this set with another set.
-        The sets are compared by comparing the simple sets in order.
-        If the pair of simple sets are equal, the next pair is compared.
-        If all pairs are equal, the set with the least amount of simple sets is considered smaller.
+
+        The sets are compared by comparing the simple sets in order. If the pair of simple sets are equal, the next pair is compared.
+        If all pairs are equal, the set with the least amount of simple sets is
+        considered smaller.
 
         ..note:: This does not define a total order in the mathematical sense. In the mathematical sense, this defines
             a partial order.
@@ -311,17 +348,16 @@ class AbstractCompositeSet(CPPWrapper, SubclassJSONSerializer, ABC):
         :param other: The other set
         :return: Rather this set is smaller than the other set
         """
-
         return self.cpp_object < other.cpp_object
 
-    def to_json(self) -> Dict[str, Any]:
+    def to_json(self) -> dict[str, Any]:
         return {
             **super().to_json(),
             "simple_sets": [simple_set.to_json() for simple_set in self.simple_sets],
         }
 
     @classmethod
-    def _from_json(cls, data: Dict[str, Any], **kwargs) -> Self:
+    def _from_json(cls, data: dict[str, Any], **kwargs) -> Self:
         return cls.from_simple_sets(
             *[
                 AbstractSimpleSet.from_json(simple_set)
@@ -329,11 +365,15 @@ class AbstractCompositeSet(CPPWrapper, SubclassJSONSerializer, ABC):
             ]
         )
 
-    def __deepcopy__(self):
+    def __deepcopy__(self, memo: dict[int, Any] | None = None) -> Self:
+        """
+        :param memo: The objects already copied during this deep copy, by their id.
+        :return: An equal set that shares no mutable state with this one.
+        """
         return self.__class__.from_simple_sets(
-            *[ss.__deepcopy__() for ss in self.simple_sets]
+            *[copy.deepcopy(simple_set, memo) for simple_set in self.simple_sets]
         )
 
 
 # Type definitions
-SimpleSetContainer = Tuple[AbstractSimpleSet, ...]
+SimpleSetContainer = tuple[AbstractSimpleSet, ...]

@@ -1,4 +1,5 @@
-"""Open3D-based visualization for RoboKudo pipelines.
+"""
+Open3D-based visualization for RoboKudo pipelines.
 
 This module provides 3D visualization capabilities for RoboKudo pipelines using Open3D.
 It handles:
@@ -13,14 +14,16 @@ It handles:
 import logging
 
 import open3d as o3d  # this import creates a SIGINT during unit test execution....
+from typing_extensions import Any
+
 from robokudo.annotators.core import BaseAnnotator
 from robokudo.defs import PACKAGE_NAME
 from robokudo.vis.visualizer import Visualizer
-from typing_extensions import Any, List, Dict, Union, Optional
 
 
 class O3DVisualizer(Visualizer, Visualizer.Observer):
-    """Open3D-based visualizer for 3D geometry data.
+    """
+    Open3D-based visualizer for 3D geometry data.
 
     This class provides visualization of 3D geometry data from pipeline annotators using
     Open3D windows. It supports:
@@ -36,12 +39,15 @@ class O3DVisualizer(Visualizer, Visualizer.Observer):
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        """Initialize the Open3D visualizer."""
+        """
+        Initialize the Open3D visualizer.
+        """
         super().__init__(*args, **kwargs)
 
-        self.viewer3d: Optional[Viewer3D] = None
-        """Open3D viewer instance"""
-
+        self.viewer3d: Viewer3D | None = None
+        """
+        Open3D viewer instance.
+        """
         self.shared_visualizer_state.register_observer(self)
 
     def notify(
@@ -50,14 +56,16 @@ class O3DVisualizer(Visualizer, Visualizer.Observer):
         *args: Any,
         **kwargs: Any,
     ) -> None:
-        """Handle notification of state changes.
+        """
+        Handle notification of state changes.
 
         :param observable: The object that sent the notification
         """
         self.update_output = True
 
     def tick(self) -> None:
-        """Update the visualization display.
+        """
+        Update the visualization display.
 
         This method:
 
@@ -102,12 +110,15 @@ class O3DVisualizer(Visualizer, Visualizer.Observer):
             self.indicate_termination_var = True
 
     def window_title(self) -> str:
-        """Get the window title for this visualizer."""
+        """
+        Get the window title for this visualizer.
+        """
         return self.identifier()
 
 
 class Viewer3D(object):
-    """Open3D viewer wrapper for 3D visualization.
+    """
+    Open3D viewer wrapper for 3D visualization.
 
     This class wraps the Open3D visualization functionality to provide:
 
@@ -118,24 +129,29 @@ class Viewer3D(object):
     """
 
     def __init__(self, title: str) -> None:
-        """Initialize the 3D viewer.
+        """
+        Initialize the 3D viewer.
 
         :param title: Window title for the viewer
         """
         self.first_cloud: bool = True
-        """Flag indicating if this is the first cloud being displayed"""
-
+        """
+        Flag indicating if this is the first cloud being displayed.
+        """
         self.CLOUD_NAME: str = "Viewer3D"
-        """Name identifier for the point cloud"""
-
+        """
+        Name identifier for the point cloud.
+        """
         self.rk_logger: logging.Logger = logging.getLogger(PACKAGE_NAME)
-        """Logger instance"""
-
+        """
+        Logger instance.
+        """
         app: o3d.visualization.gui.Application = (
             o3d.visualization.gui.Application.instance
         )
-        """Open3D app instance"""
-
+        """
+        Open3D app instance.
+        """
         app.initialize()
 
         self.rk_logger.info(
@@ -146,17 +162,21 @@ class Viewer3D(object):
         self.main_vis: o3d.visualization.O3DVisualizer = (
             o3d.visualization.O3DVisualizer(title)
         )
-        """Open3D visualizer instance"""
-
+        """
+        Open3D visualizer instance.
+        """
         self.rk_logger.info("Starting O3DVisualizer was successful")
 
         app.add_window(self.main_vis)
 
-        self.visualized_geometries: List[str] = []
-        """List of the names of the currently visualized geometries"""
+        self.visualized_geometries: list[str] = []
+        """
+        List of the names of the currently visualized geometries.
+        """
 
     def tick(self) -> Any:
-        """Update the viewer display.
+        """
+        Update the viewer display.
 
         :returns: False if visualization should terminate, True otherwise
         """
@@ -167,9 +187,10 @@ class Viewer3D(object):
         return tick_return
 
     def update_cloud(
-        self, geometries: Optional[Union[o3d.geometry.Geometry, Dict, List]]
+        self, geometries: o3d.geometry.Geometry | dict | list | None
     ) -> None:
-        """Update the displayed geometries.
+        """
+        Update the displayed geometries.
 
         This method updates the Open3D visualizer based on the outputs of the annotators.
         For the first update, it also sets up the camera and coordinate frame.
@@ -185,7 +206,7 @@ class Viewer3D(object):
 
         # local method to add a single geometry. either based on the geometry being fully
         # defined with a dict or being a plain geometry object
-        def add(g: Union[o3d.geometry.PointCloud, Dict, List], n: int) -> None:
+        def add(g: o3d.geometry.PointCloud | dict | list, n: int) -> None:
             # Skip empty point clouds as they generate errors during the update
             if isinstance(g, o3d.geometry.PointCloud) and len(g.points) == 0:
                 return
@@ -202,7 +223,7 @@ class Viewer3D(object):
         # Add all geometries from the given parameter.
         # It is safe to either input a plain geometry object or a list of objects.
         def add_all(
-            geometries_to_add: Union[o3d.geometry.Geometry, Dict, List],
+            geometries_to_add: o3d.geometry.Geometry | dict | list,
         ) -> None:
             n = 1
             if isinstance(geometries_to_add, list):
